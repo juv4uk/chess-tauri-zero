@@ -11,10 +11,25 @@ import chess
 
 sys.path.insert(0, ".")
 from chess_zero.agent.load_weights import load_torch_model
-from chess_zero.agent.play_torch import best_move
+from chess_zero.agent.player_chess_torch import TorchChessPlayer, PlayConfig
+from chess_zero.env.chess_env import ChessEnv
 
 STATE_FILE = "/tmp/chess_turn_state.fen"
 MODEL = None
+SIMULATIONS_PER_MOVE = 200  # much less than the original's 1200, tuned for interactive speed
+
+
+def human_play_config() -> PlayConfig:
+    """Deterministic settings for playing against a human -- matches the
+    original project's own PlayWithHumanConfig convention: noise_eps=0
+    and effectively tau=0 (argmax) disable the exploration randomness
+    that self-play training wants but a human opponent doesn't."""
+    pc = PlayConfig()
+    pc.simulation_num_per_move = SIMULATIONS_PER_MOVE
+    pc.noise_eps = 0
+    pc.tau_decay_rate = 0
+    pc.resign_threshold = None
+    return pc
 
 
 def get_model():
@@ -78,10 +93,12 @@ def main():
         return
 
     model = get_model()
-    scored, value = best_move(model, board)
-    model_move = scored[0][1]
+    player = TorchChessPlayer(model, human_play_config())
+    env = ChessEnv().update(board.fen())
+    move_uci = player.action(env)
+    model_move = chess.Move.from_uci(move_uci)
     board.push(model_move)
-    print(f"Хід моделі: {model_move.uci()}  (оцінка позиції до ходу: {value:+.3f})")
+    print(f"Хід моделі (MCTS, {SIMULATIONS_PER_MOVE} симуляцій): {model_move.uci()}")
     print()
     print(render_board(board))
     print()
