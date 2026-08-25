@@ -77,8 +77,16 @@ def state_key(env: ChessEnv) -> str:
 
 
 class TorchChessPlayer:
-    def __init__(self, model, play_config: PlayConfig = None):
+    def __init__(self, model, play_config: PlayConfig = None, predictor=None):
+        """predictor: optional BatchedPredictor (agent/batched_predictor.py)
+        -- when given, leaf evaluations from this player's search
+        threads get batched into shared GPU forward passes instead of
+        one call per leaf. Omit for interactive/single-query use
+        (play_turn.py, uci_torch.py) where there's nothing concurrent
+        to batch with; self-play and evaluate wire one in since their
+        search_threads genuinely run concurrent MCTS simulations."""
         self.model = model
+        self.predictor = predictor
         self.play_config = play_config or PlayConfig()
         self.labels_n = N_LABELS
         self.labels = LABELS
@@ -165,6 +173,8 @@ class TorchChessPlayer:
         return leaf_p, leaf_v
 
     def predict(self, state_planes):
+        if self.predictor is not None:
+            return self.predictor.predict(state_planes)
         device = next(self.model.parameters()).device
         x = torch.from_numpy(state_planes).unsqueeze(0).float().to(device)
         with torch.no_grad():

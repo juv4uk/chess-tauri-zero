@@ -15,6 +15,7 @@ import torch
 
 sys.path.insert(0, ".")
 from chess_zero.agent.player_chess_torch import TorchChessPlayer, PlayConfig
+from chess_zero.agent.batched_predictor import BatchedPredictor
 from chess_zero.env.chess_env import ChessEnv, Winner
 
 REPLACE_RATE = 0.55
@@ -33,12 +34,20 @@ def eval_play_config():
     return pc
 
 
-def play_one_game(candidate_model, best_model, candidate_white: bool, play_config: PlayConfig, max_halfmoves=40):
+def play_one_game(candidate_model, best_model, candidate_white: bool, play_config: PlayConfig, max_halfmoves=40,
+                   candidate_predictor=None, best_predictor=None):
     """Plays one game between candidate and best. Returns candidate's
-    score: 1.0 win, 0.5 draw, 0.0 loss."""
+    score: 1.0 win, 0.5 draw, 0.0 loss.
+
+    candidate/best are different models, so they need separate
+    BatchedPredictors (a batch can only mix leaves headed for the same
+    model) -- each player's own search threads still batch together
+    within their own predictor."""
     env = ChessEnv().reset()
-    white_player = TorchChessPlayer(candidate_model if candidate_white else best_model, play_config)
-    black_player = TorchChessPlayer(best_model if candidate_white else candidate_model, play_config)
+    white_predictor = candidate_predictor if candidate_white else best_predictor
+    black_predictor = best_predictor if candidate_white else candidate_predictor
+    white_player = TorchChessPlayer(candidate_model if candidate_white else best_model, play_config, predictor=white_predictor)
+    black_player = TorchChessPlayer(best_model if candidate_white else candidate_model, play_config, predictor=black_predictor)
 
     while not env.done and env.num_halfmoves < max_halfmoves:
         player = white_player if env.white_to_move else black_player
@@ -61,14 +70,21 @@ def evaluate_candidate(candidate_model, best_model, game_num=4, max_halfmoves=40
     vs the original's 50) for the same small-scale-verification reason
     as the rest of this loop."""
     pc = eval_play_config()
+    candidate_predictor = BatchedPredictor(candidate_model)
+    best_predictor = BatchedPredictor(best_model)
     scores = []
-    for i in range(game_num):
-        candidate_white = (i % 2 == 0)
-        score = play_one_game(candidate_model, best_model, candidate_white, pc, max_halfmoves)
-        scores.append(score)
-        win_rate = sum(scores) / len(scores)
-        print(f"  game {i+1}/{game_num}: candidate as {'white' if candidate_white else 'black'}, "
-              f"score={score}, running win_rate={win_rate*100:.1f}%")
+    try:
+        for i in range(game_num):
+            candidate_white = (i % 2 == 0)
+            score = play_one_game(candidate_model, best_model, candidate_white, pc, max_halfmoves,
+                                   candidate_predictor=candidate_predictor, best_predictor=best_predictor)
+            scores.append(score)
+            win_rate = sum(scores) / len(scores)
+            print(f"  game {i+1}/{game_num}: candidate as {'white' if candidate_white else 'black'}, "
+                  f"score={score}, running win_rate={win_rate*100:.1f}%")
+    finally:
+        candidate_predictor.stop()
+        best_predictor.stop()
 
     win_rate = sum(scores) / len(scores)
     return win_rate, win_rate >= REPLACE_RATE

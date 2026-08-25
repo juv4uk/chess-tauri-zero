@@ -28,20 +28,31 @@ import torch
 sys.path.insert(0, ".")
 from chess_zero.agent.load_weights import load_torch_model
 from chess_zero.agent.player_chess_torch import TorchChessPlayer, PlayConfig
+from chess_zero.agent.batched_predictor import BatchedPredictor
 from chess_zero.env.chess_env import ChessEnv, Winner
 from chess_zero.lib.data_helper_torch import write_game_data_to_file, PLAY_DATA_DIR, PLAY_DATA_FILENAME_TMPL
 
 
-def self_play_game(model, play_config: PlayConfig, max_halfmoves: int = 40):
+def self_play_game(model, play_config: PlayConfig, max_halfmoves: int = 40, predictor=None):
     """Plays one game, both sides using the same model. max_halfmoves
     caps game length for a bounded verification run -- the original
     had no such cap (max_game_length=1000, i.e. play to a real result);
     a full game to checkmate/draw can take a very long time even on
     GPU with MCTS, so this defaults to a short, honest partial game
-    unless the caller explicitly asks for more."""
+    unless the caller explicitly asks for more.
+
+    predictor: optional shared BatchedPredictor -- both sides use the
+    same model, so their concurrent search threads' leaf evaluations
+    batch together into one predictor. If None, a temporary one is
+    created and stopped just for this game (self_play_loop passes a
+    shared one instead, to amortize across many games)."""
+    own_predictor = predictor is None
+    if own_predictor:
+        predictor = BatchedPredictor(model)
+
     env = ChessEnv().reset()
-    white = TorchChessPlayer(model, play_config)
-    black = TorchChessPlayer(model, play_config)
+    white = TorchChessPlayer(model, play_config, predictor=predictor)
+    black = TorchChessPlayer(model, play_config, predictor=predictor)
 
     while not env.done and env.num_halfmoves < max_halfmoves:
         player = white if env.white_to_move else black
@@ -70,6 +81,9 @@ def self_play_game(model, play_config: PlayConfig, max_halfmoves: int = 40):
         if i < len(black.moves):
             data.append(black.moves[i])
 
+    if own_predictor:
+        predictor.stop()
+
     return env, data
 
 
@@ -78,25 +92,37 @@ def self_play_loop(model, play_config: PlayConfig, num_games: int, max_halfmoves
     """Plays num_games games and saves each as its own file via
     data_helper_torch, in the same on-disk shape the original
     self_play.py's SelfPlayWorker produced (one JSON file per game).
-    Sequential, single-process -- the original ran many of these
+    Sequential across games, single-process -- the original ran many
     concurrently via ProcessPoolExecutor; that concurrency is
     infrastructure, not part of "does self-play produce usable data",
-    and is not ported here (see docs/pytorch-self-play-loop-plan-uk.md)."""
+    and is not ported here (see docs/pytorch-self-play-loop-plan-uk.md).
+    Within each game, though, leaf evaluations from the concurrent
+    MCTS search threads DO batch onto the GPU together, via one
+    BatchedPredictor shared across all num_games (created once here
+    rather than per-game, so its background thread isn't restarted
+    every game)."""
     os.makedirs(data_dir, exist_ok=True)
+    predictor = BatchedPredictor(model)
     saved_paths = []
-    for i in range(num_games):
-        t0 = time.time()
-        env, data = self_play_game(model, play_config, max_halfmoves=max_halfmoves)
-        dt = time.time() - t0
+    try:
+        for i in range(num_games):
+            t0 = time.time()
+            env, data = self_play_game(model, play_config, max_halfmoves=max_halfmoves, predictor=predictor)
+            dt = time.time() - t0
 
-        ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        path = os.path.join(data_dir, PLAY_DATA_FILENAME_TMPL % ts)
-        write_game_data_to_file(path, data)
-        saved_paths.append(path)
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            path = os.path.join(data_dir, PLAY_DATA_FILENAME_TMPL % ts)
+            write_game_data_to_file(path, data)
+            saved_paths.append(path)
 
-        truncated = env.num_halfmoves >= max_halfmoves and not env.done
-        print(f"  game {i+1}/{num_games}: {env.num_halfmoves} halfmoves, result={env.result}"
-              f"{' (truncated, adjudicated)' if truncated else ''}, {len(data)} moves, {dt:.1f}s -> {path}")
+            truncated = env.num_halfmoves >= max_halfmoves and not env.done
+            print(f"  game {i+1}/{num_games}: {env.num_halfmoves} halfmoves, result={env.result}"
+                  f"{' (truncated, adjudicated)' if truncated else ''}, {len(data)} moves, {dt:.1f}s -> {path}")
+    finally:
+        stats = predictor.stats()
+        predictor.stop()
+    print(f"  batching: {stats['batches']} GPU calls for {stats['items']} leaf evals "
+          f"(mean batch size {stats['mean_batch_size']:.1f})")
     return saved_paths
 
 
