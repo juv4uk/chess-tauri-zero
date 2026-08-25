@@ -1,6 +1,128 @@
 [![Binder](https://mybinder.org/badge.svg)](https://mybinder.org/v2/gh/kmader/chess-alpha-zero/master?urlpath=lab)
 [![Demo Notebook](https://img.shields.io/badge/launch-demo_notebook-red.svg)](https://mybinder.org/v2/gh/kmader/chess-alpha-zero/master?filepath=notebooks%2Fdemo.ipynb)
 
+PyTorch-порт (2026)
+====================
+
+Цей форк ([juv4uk/chess-alpha-zero](https://github.com/juv4uk/chess-alpha-zero),
+з оригіналу [kmader/chess-alpha-zero](https://github.com/kmader/chess-alpha-zero))
+переписаний з мертвого стеку `tensorflow-gpu==1.15.2`/`keras==2.0.8`/Python 3.6
+на **PyTorch 2.13**, з реально працюючими вагами (`data/model/model_best_weight.h5`)
+та повним, перевіреним циклом self-play → тренування → arena. Методологія
+лишається чистою AlphaZero (нуль людських шахових знань — жодної дистиляції
+від Stockfish чи іншого рушія), просто адаптована під слабке залізо
+(GTX 1050 Ti, 4 ядра CPU) через batched MCTS замість масштабної self-play
+інфраструктури оригіналу.
+
+Детальніше: [`docs/pytorch-port-uk.md`](docs/pytorch-port-uk.md) (що і чому),
+[`docs/pytorch-port-roadmap-uk.md`](docs/pytorch-port-roadmap-uk.md) (план портування),
+[`docs/pytorch-self-play-loop-plan-uk.md`](docs/pytorch-self-play-loop-plan-uk.md)
+(план self-play→train→evaluate циклу).
+
+## Встановлення
+
+```bash
+cd chess-alpha-zero
+python3 -m venv .venv
+source .venv/bin/activate
+pip install h5py numpy python-chess
+
+# GPU: якщо карта старша (compute capability < 7.5, напр. GTX 1050 Ti / sm_61) --
+# звичайний "pip install torch" ставить збірку без ядер під таку архітектуру
+# (тиха помилка CUBLAS_STATUS_ARCH_MISMATCH при першому реальному виклику).
+# Потрібна саме cu126-збірка:
+pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu126
+
+# Або без GPU (повільніше, але коректно):
+pip install torch==2.13.0
+```
+
+Усі команди нижче виконуються **з каталогу `src/`** (скрипти читають ваги за
+відносним шляхом `../data/model/model_best_weight.h5`):
+
+```bash
+cd src
+source ../.venv/bin/activate
+```
+
+## Пограти інтерактивно (з консолі)
+
+Одна команда = один хід. Стан партії зберігається між викликами у `/tmp/chess_turn_state.fen`.
+
+```bash
+python3 chess_zero/agent/play_turn.py           # модель ходить першою (за білих)
+python3 chess_zero/agent/play_turn.py e2e4      # твій хід (UCI або SAN: "e4", "Nf3" теж підійде)
+```
+
+## UCI-рушій (для GUI на кшталт Arena/CuteChess, або python-chess)
+
+```bash
+python3 chess_zero/play_game/uci_torch.py
+# або перевірка вручну:
+echo -e "uci\nisready\nposition startpos\ngo\nquit" | python3 chess_zero/play_game/uci_torch.py
+```
+
+## Self-play (генерація партій моделлю самою проти себе)
+
+```bash
+python3 chess_zero/worker/self_play_torch.py 5   # 5 партій, зберігаються в ../data/play_data_torch/
+```
+
+MCTS-пошук усередині кожної партії використовує batched-предиктор
+(`agent/batched_predictor.py`) — паралельні гілки пошуку діляться GPU
+батчами замість окремого forward pass на кожен лист дерева
+(~4x швидше на GTX 1050 Ti, підтверджено вимірюванням).
+
+## Тренування на накопичених self-play даних
+
+```bash
+python3 chess_zero/worker/optimize_torch.py   # запущений сам по собі -- лише
+                                                # синтетична перевірка механізму
+```
+
+Реальне тренування на справжніх self-play даних відбувається через
+`optimize_torch.load_dataset`/`train_epochs` — викликається `pipeline_torch.py`
+(нижче), не напряму.
+
+## Evaluate (кандидат проти поточної найкращої моделі)
+
+```bash
+python3 chess_zero/worker/evaluate_torch.py                       # кандидат = базова модель (перевірка механізму, ~50%)
+python3 chess_zero/worker/evaluate_torch.py ../data/model_torch/next_generation/model_cycle0.pt  # реальний кандидат
+```
+
+## Повний цикл: self-play → train → evaluate → promote
+
+```bash
+python3 chess_zero/worker/pipeline_torch.py 3   # 3 цикли поспіль
+```
+
+Кожен цикл: 2 self-play партії → 1 епоха тренування кандидата на всіх
+накопичених партіях (`../data/play_data_torch/`) → 2 arena-партії
+кандидат vs найкраща модель → якщо кандидат набрав ≥55% — стає новою
+`../data/model_torch/model_best.pt`, інакше відкидається.
+
+Дані й моделі, згенеровані цими скриптами, лежать у `data/play_data_torch/`
+і `data/model_torch/` (в `.gitignore`, не комітяться) -- окремо від
+оригінальних `data/play_data/`/`data/model/next_generation/`, щоб нічого
+з оригінального Keras-стеку не зачепити.
+
+## Що ще НЕ реалізовано (чесно)
+
+- **Масштабна self-play інфраструктура** — оригінал ганяв нескінченний пул
+  процесів (`ProcessPoolExecutor`), генеруючи тисячі партій паралельно.
+  Тут — послідовний, обмежений цикл (кілька партій за раз).
+- **Реальне повноцінне тренування** — оригінал тренував на корпусі до
+  100 000 позицій з регулярними чекпоінтами. Тут — невелика кількість
+  self-play партій за прогін; щоб модель реально стала сильнішою за вже
+  натреновану `model_best_weight.h5`, потрібні тисячі партій і багато
+  циклів `pipeline_torch.py` — довгий прогін, не одноразовий запуск.
+- **FTP-розподілена генерація** оригіналу — свідомо не портовано (мертвий
+  сервер 2017 року, пароль у відкритому тексті в старому конфігу).
+- **Дистиляція від зовнішнього рушія (Stockfish тощо)** — свідомо НЕ
+  зроблено: це дало б сильнішу гру швидше, але порушило б "zero" —
+  принцип нуля людських/зовнішніх знань, на якому стоїть AlphaZero.
+
 About
 =====
 
