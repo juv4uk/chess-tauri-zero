@@ -90,6 +90,15 @@ class TorchChessPlayer:
     def reset(self):
         self.tree = defaultdict(VisitStats)
 
+    def finish_game(self, z):
+        """z: win=1, lose=-1, draw=0 -- appended to every recorded move
+        so optimize_torch.py's data pipeline can build (state, policy,
+        value) training triples. Direct port of the original
+        ChessPlayer.finish_game, which this port had not carried over
+        yet (self_play_torch.py is what actually needs it)."""
+        for move in self.moves:
+            move += [z]
+
     def action(self, env: ChessEnv, can_stop=True):
         self.reset()
         root_value, _ = self.search_moves(env)
@@ -156,7 +165,8 @@ class TorchChessPlayer:
         return leaf_p, leaf_v
 
     def predict(self, state_planes):
-        x = torch.from_numpy(state_planes).unsqueeze(0).float()
+        device = next(self.model.parameters()).device
+        x = torch.from_numpy(state_planes).unsqueeze(0).float().to(device)
         with torch.no_grad():
             policy, value = self.model(x)
         return policy.squeeze(0).numpy(), float(value.item())
