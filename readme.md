@@ -4,7 +4,7 @@
 PyTorch-порт (2026)
 ====================
 
-Цей форк ([juv4uk/chess-alpha-zero](https://github.com/juv4uk/chess-alpha-zero),
+Цей форк ([juv4uk/chess-tauri-zero](https://github.com/juv4uk/chess-tauri-zero),
 з оригіналу [kmader/chess-alpha-zero](https://github.com/kmader/chess-alpha-zero))
 переписаний з мертвого стеку `tensorflow-gpu==1.15.2`/`keras==2.0.8`/Python 3.6
 на **PyTorch 2.13**, з реально працюючими вагами (`data/model/model_best_weight.h5`)
@@ -22,7 +22,7 @@ PyTorch-порт (2026)
 ## Встановлення
 
 ```bash
-cd chess-alpha-zero
+cd chess-tauri-zero
 python3 -m venv .venv
 source .venv/bin/activate
 pip install h5py numpy python-chess

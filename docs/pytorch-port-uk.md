@@ -65,7 +65,7 @@
 ## Запуск
 
 ```bash
-cd chess-alpha-zero
+cd chess-tauri-zero
 python3 -m venv .venv
 .venv/bin/pip install torch h5py numpy python-chess
 cd src
