@@ -1,12 +1,10 @@
-"""PyTorch port of optimize.py's training step -- roadmap step 3,
-scoped deliberately: this ports the TRAINING MECHANISM (loss functions,
-optimizer, one train_step) and verifies it actually runs a real
-backward pass + parameter update. It does NOT run self-play data
-generation (worker/self_play.py) -- that's a genuinely long-running,
-CPU-heavy process (many full MCTS games) and deliberately not started
-here, per the same resource-pacing discipline used for GUIX-WITNESS-01
-earlier. Running real self-play + multi-epoch training is a separate,
-much bigger task than porting the step itself.
+"""PyTorch port of optimize.py's training step, since extended
+(docs/pytorch-self-play-loop-plan-uk.md) with a real dataset loader
+and multi-epoch training loop that consumes actual self-play data
+(worker/self_play_torch.py's saved games), not just the original
+synthetic mechanism check. load_dataset/train_epochs are still scoped
+to the small-scale runs this machine can actually produce (weak GPU,
+4 CPU cores) -- not production-scale AlphaZero training.
 
 Original (optimize.py, read directly): Adam optimizer, losses
 ['categorical_crossentropy', 'mean_squared_error'], loss_weights
@@ -18,11 +16,15 @@ equivalent for a soft-label target is the standard AlphaZero policy
 loss -(target * log(pred)).sum(dim=1).mean(), not
 nn.CrossEntropyLoss (which expects integer class indices by default).
 """
+import random
+
+import numpy as np
 import torch
 import torch.nn.functional as F
 
 POLICY_LOSS_WEIGHT = 1.25
 VALUE_LOSS_WEIGHT = 1.0
+N_LABELS = 1968  # create_uci_labels() -- see player_chess_torch.py
 
 
 def policy_loss(pred_policy: torch.Tensor, target_policy: torch.Tensor) -> torch.Tensor:
@@ -62,6 +64,81 @@ def make_optimizer(model, lr=1e-3):
     not tuned further since this is the mechanism check, not a real
     training run."""
     return torch.optim.Adam(model.parameters(), lr=lr)
+
+
+def load_dataset(data_dir):
+    """Reads every saved self-play game (data_helper_torch's
+    [fen, policy, value] triples, see self_play_torch.py) and turns
+    them into (state, policy, value) tensors ready for train_step.
+
+    Each record stores the raw board FEN (ChessEnv.observation), not
+    planes -- canon_input_planes() does the same side-to-move flip
+    used at inference time (expand_and_evaluate), so training sees
+    exactly the encoding the model is actually queried with."""
+    import sys
+    sys.path.insert(0, ".")
+    from chess_zero.env.chess_env import canon_input_planes
+    from chess_zero.lib.data_helper_torch import get_game_data_filenames, read_game_data_from_file
+
+    states, policies, values = [], [], []
+    for path in get_game_data_filenames(data_dir):
+        for fen, policy, value in read_game_data_from_file(path):
+            states.append(canon_input_planes(fen))
+            policies.append(policy)
+            values.append(value)
+
+    if not states:
+        return None, None, None
+
+    state_t = torch.from_numpy(np.stack(states)).float()
+    policy_t = torch.from_numpy(np.stack(policies)).float()
+    value_t = torch.tensor(values, dtype=torch.float32)
+    return state_t, policy_t, value_t
+
+
+def train_epochs(model, optimizer, data_dir, epochs=1, batch_size=32):
+    """Real training loop over saved self-play data: shuffles indices
+    each epoch, runs train_step per batch, prints per-epoch mean loss.
+    batch_size default is small (32, vs the original's 384) since
+    load_dataset's game counts here are necessarily small-scale (see
+    docs/pytorch-self-play-loop-plan-uk.md) -- a large batch would
+    just be one under-full batch."""
+    state_t, policy_t, value_t = load_dataset(data_dir)
+    if state_t is None:
+        print(f"No games found in {data_dir} -- nothing to train on.")
+        return []
+
+    n = state_t.shape[0]
+    device = next(model.parameters()).device
+    history = []
+
+    for epoch in range(epochs):
+        idx = list(range(n))
+        random.shuffle(idx)
+        epoch_losses = []
+        for start in range(0, n, batch_size):
+            batch_idx = idx[start:start + batch_size]
+            sb = state_t[batch_idx].to(device)
+            pb = policy_t[batch_idx].to(device)
+            vb = value_t[batch_idx].to(device)
+            total, p, v = train_step(model, optimizer, sb, pb, vb)
+            epoch_losses.append(total)
+        mean_loss = sum(epoch_losses) / len(epoch_losses)
+        history.append(mean_loss)
+        print(f"  epoch {epoch+1}/{epochs}: mean loss={mean_loss:.4f} over {len(epoch_losses)} batch(es), {n} positions")
+
+    return history
+
+
+def save_checkpoint(model, path):
+    import os
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    torch.save(model.state_dict(), path)
+
+
+def load_checkpoint(model, path):
+    model.load_state_dict(torch.load(path, map_location=next(model.parameters()).device))
+    return model
 
 
 if __name__ == "__main__":

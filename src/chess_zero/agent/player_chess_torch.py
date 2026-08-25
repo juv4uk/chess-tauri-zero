@@ -169,7 +169,7 @@ class TorchChessPlayer:
         x = torch.from_numpy(state_planes).unsqueeze(0).float().to(device)
         with torch.no_grad():
             policy, value = self.model(x)
-        return policy.squeeze(0).numpy(), float(value.item())
+        return policy.squeeze(0).cpu().numpy(), float(value.item())
 
     def select_action_q_and_u(self, env: ChessEnv, is_root_node):
         state = state_key(env)

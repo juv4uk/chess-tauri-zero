@@ -13,14 +13,15 @@ infrastructure, not part of "does self-play actually work", and
 running it for real is a genuinely long, resource-heavy job on its
 own (not attempted here, same discipline as the rest of this port).
 
-Avoids data_helper.py's pretty_print/write_game_data_to_file, both of
-which import pyperclip (clipboard access, fails headless) -- writes
-plain JSON directly instead, same on-disk shape.
+Uses lib/data_helper_torch.py's write_game_data_to_file (a straight
+port of data_helper.py's, minus pretty_print/pyperclip, which fails
+headless) so saved games are consumable by optimize_torch.py's
+data pipeline without adaptation.
 """
-import json
 import os
 import sys
 import time
+from datetime import datetime
 
 import torch
 
@@ -28,6 +29,7 @@ sys.path.insert(0, ".")
 from chess_zero.agent.load_weights import load_torch_model
 from chess_zero.agent.player_chess_torch import TorchChessPlayer, PlayConfig
 from chess_zero.env.chess_env import ChessEnv, Winner
+from chess_zero.lib.data_helper_torch import write_game_data_to_file, PLAY_DATA_DIR, PLAY_DATA_FILENAME_TMPL
 
 
 def self_play_game(model, play_config: PlayConfig, max_halfmoves: int = 40):
@@ -71,6 +73,33 @@ def self_play_game(model, play_config: PlayConfig, max_halfmoves: int = 40):
     return env, data
 
 
+def self_play_loop(model, play_config: PlayConfig, num_games: int, max_halfmoves: int = 40,
+                    data_dir: str = PLAY_DATA_DIR):
+    """Plays num_games games and saves each as its own file via
+    data_helper_torch, in the same on-disk shape the original
+    self_play.py's SelfPlayWorker produced (one JSON file per game).
+    Sequential, single-process -- the original ran many of these
+    concurrently via ProcessPoolExecutor; that concurrency is
+    infrastructure, not part of "does self-play produce usable data",
+    and is not ported here (see docs/pytorch-self-play-loop-plan-uk.md)."""
+    os.makedirs(data_dir, exist_ok=True)
+    saved_paths = []
+    for i in range(num_games):
+        t0 = time.time()
+        env, data = self_play_game(model, play_config, max_halfmoves=max_halfmoves)
+        dt = time.time() - t0
+
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        path = os.path.join(data_dir, PLAY_DATA_FILENAME_TMPL % ts)
+        write_game_data_to_file(path, data)
+        saved_paths.append(path)
+
+        truncated = env.num_halfmoves >= max_halfmoves and not env.done
+        print(f"  game {i+1}/{num_games}: {env.num_halfmoves} halfmoves, result={env.result}"
+              f"{' (truncated, adjudicated)' if truncated else ''}, {len(data)} moves, {dt:.1f}s -> {path}")
+    return saved_paths
+
+
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = load_torch_model("../data/model/model_best_weight.h5").to(device)
@@ -80,18 +109,10 @@ if __name__ == "__main__":
     pc.simulation_num_per_move = 50  # reduced for a quick verification run, not a real self-play session
     pc.resign_threshold = None
 
-    max_halfmoves = 20  # bounded verification, not a full game -- see module docstring
+    num_games = int(sys.argv[1]) if len(sys.argv) > 1 else 2
+    max_halfmoves = 20  # bounded verification, not full games -- see module docstring
 
     t0 = time.time()
-    env, data = self_play_game(model, pc, max_halfmoves=max_halfmoves)
+    paths = self_play_loop(model, pc, num_games=num_games, max_halfmoves=max_halfmoves)
     dt = time.time() - t0
-
-    truncated = env.num_halfmoves >= max_halfmoves and not env.done
-    print(f"Game {'(truncated at cap, adjudicated)' if truncated else '(reached a real result)'}: "
-          f"{env.num_halfmoves} halfmoves, result={env.result}, {dt:.1f}s")
-    print(f"Collected {len(data)} training triples (fen, policy, value)")
-
-    out_path = "/tmp/self_play_verify.json"
-    with open(out_path, "w") as f:
-        json.dump(data, f)
-    print(f"Saved to {out_path} ({os.path.getsize(out_path):,} bytes) -- verification output, not a real training corpus")
+    print(f"Saved {len(paths)} game(s) to {PLAY_DATA_DIR}/ in {dt:.1f}s -- small-scale verification, not a real training corpus")
