@@ -1,0 +1,17 @@
+#!/bin/bash
+# Tauri sidecar wrapper: execs the already-working PyTorch UCI engine
+# (../../../src/chess_zero/play_game/uci_torch.py) inside its own venv.
+# A shell wrapper, not a PyInstaller-frozen binary -- bundling
+# torch+cuda into a single portable executable is a separate, heavier
+# packaging task; this is the minimum needed to prove the Rust<->Python
+# UCI bridge over stdin/stdout actually works, per the owner's own
+# "мінімум роботи" framing for this integration step.
+#
+# Tauri's sidecar convention requires the binary name to carry the
+# exact rustc host target triple suffix (confirmed via `rustc -vV`
+# on this machine: x86_64-unknown-linux-gnu) so `tauri build`/`dev`
+# can find it for the current platform.
+set -euo pipefail
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$REPO_ROOT/src"
+exec "$REPO_ROOT/.venv/bin/python3" chess_zero/play_game/uci_torch.py
