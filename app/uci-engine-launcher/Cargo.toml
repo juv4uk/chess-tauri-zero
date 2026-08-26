@@ -1,0 +1,9 @@
+[package]
+name = "uci-engine-launcher"
+version = "0.1.0"
+edition = "2021"
+description = "Windows sidecar launcher: execs uci_torch.py inside the repo-relative venv the end user sets up themselves (see src-tauri/binaries/uci-engine-x86_64-unknown-linux-gnu's comment for the Linux equivalent, which IS empirically verified). Windows has no exec()-style process replacement, so this spawns python.exe as a child with inherited stdio (transparent passthrough for the UCI stdin/stdout Tauri's sidecar plugin pipes through) and forwards its exit code."
+
+[[bin]]
+name = "uci-engine"
+path = "src/main.rs"

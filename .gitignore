@@ -28,6 +28,7 @@ logs/
 /app/node_modules/
 /app/src-tauri/target/
 /app/src-tauri/gen/
+/app/uci-engine-launcher/target/
 # Tauri requires icon.png to exist (tauri::generate_context! fails
 # without it, confirmed) -- exception to the blanket *.png rule above.
 !/app/src-tauri/icons/*.png

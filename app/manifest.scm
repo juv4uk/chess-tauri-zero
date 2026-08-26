@@ -11,4 +11,14 @@
  '("pkg-config"
    "glib"
    "gtk+"
-   "webkitgtk-for-gtk3"))
+   "webkitgtk-for-gtk3"
+   ;; Windows cross-compile experiment (x86_64-pc-windows-gnu target):
+   ;; cargo correctly pulls the Windows-specific dependency graph
+   ;; (webview2-com, windows-core -- no gtk/webkit at all, confirmed by
+   ;; a real build attempt) but needs dlltool, which lives in the FULL
+   ;; cross gcc toolchain, not the smaller mingw-w64-tools package
+   ;; (that one only has widl/gendef/genidl/genpeimg -- checked its
+   ;; bin/ directly after a first attempt failed with "dlltool: No
+   ;; such file or directory").
+   "mingw-w64-x86_64"
+   "gcc-cross-x86_64-w64-mingw32-toolchain"))
