@@ -1,4 +1,10 @@
 @echo off
+rem chcp 65001: this file is UTF-8, and Windows consoles default to a
+rem different code page (866/1251) that mangles the Ukrainian text
+rem below into mojibake -- real, live-reported bug, not cosmetic-only
+rem (a wrong code page can also break git/python's own UTF-8 argument
+rem handling, not just what gets displayed).
+chcp 65001 >nul
 rem Runs chess-tauri-zero-current-windows-x86_64.exe with the correct
 rem working directory. Real bug found and fixed 2026-08-26: the
 rem binary's tauri.conf.json "frontendDist": "../web" resolves
