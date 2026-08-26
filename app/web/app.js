@@ -298,14 +298,26 @@ function logEngineLine(line) {
   console.debug("[engine]", line);
 }
 
+// Real bug found live (repo owner: self-play threw "Тайм-аут
+// очікування відповіді рушія" while it was actually still running --
+// on CPU-only hardware, 50 MCTS sims/move over up to 200 halfmoves can
+// legitimately take longer than one fixed window, even though the
+// engine streams a fresh line -- info mctsroot + selfplaymove -- on
+// EVERY ply). `start` used to be captured once and never reset, so
+// this was a hard cap on the WHOLE call's total duration, not on how
+// long the engine goes quiet -- a slow-but-alive, actively streaming
+// engine was indistinguishable from a truly hung one. Now reset on any
+// received line, so the timeout only fires on real silence (no output
+// at all for the whole window), not on cumulative wall-clock time.
 async function waitForLine(predicate, timeoutMs = 120000) {
   const myEpoch = engineEpoch;
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
+  let lastActivity = Date.now();
+  while (Date.now() - lastActivity < timeoutMs) {
     if (engineEpoch !== myEpoch) {
       throw new Error("Рушій перезапущено (Escape) -- очікування скасовано.");
     }
     const lines = await invoke("engine_drain");
+    if (lines.length > 0) lastActivity = Date.now();
     for (const line of lines) {
       logEngineLine(line);
       if (predicate(line)) return line;
@@ -319,14 +331,17 @@ async function waitForLine(predicate, timeoutMs = 120000) {
 // Like waitForLine, but calls onLine for every line seen (not just the
 // terminal one) -- used for selfplay/train streams where intermediate
 // lines (selfplaymove/trainprogress) matter, not just the final result.
+// Same inactivity-based timeout fix as waitForLine above -- see its
+// comment for the real bug this closes.
 async function pollUntil(matchPredicate, onLine, timeoutMs = 600000) {
   const myEpoch = engineEpoch;
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
+  let lastActivity = Date.now();
+  while (Date.now() - lastActivity < timeoutMs) {
     if (engineEpoch !== myEpoch) {
       throw new Error("Рушій перезапущено (Escape) -- очікування скасовано.");
     }
     const lines = await invoke("engine_drain");
+    if (lines.length > 0) lastActivity = Date.now();
     for (const line of lines) {
       logEngineLine(line);
       onLine(line);

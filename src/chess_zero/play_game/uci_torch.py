@@ -43,7 +43,9 @@ def human_play_config() -> PlayConfig:
 
 
 def get_player():
-    model = load_torch_model("../data/model/model_best_weight.h5")
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = load_torch_model("../data/model/model_best_weight.h5").to(device)
     return TorchChessPlayer(model, human_play_config())
 
 
@@ -162,7 +164,9 @@ def get_shared_model():
     global _shared_model
     with _shared_model_lock:
         if _shared_model is None:
-            _shared_model = load_torch_model("../data/model/model_best_weight.h5")
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            _shared_model = load_torch_model("../data/model/model_best_weight.h5").to(device)
     return _shared_model
 
 
@@ -239,7 +243,9 @@ def reset_model_to_scratch():
     serialized case of a `go` running concurrently, not for
     selfplay/train (structurally prevented by the caller instead,
     matching fix #7's own selfplay/train mutual exclusion)."""
-    fresh = ChessResNet()
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    fresh = ChessResNet().to(device)
     fresh.eval()
     fresh_state = fresh.state_dict()
 
