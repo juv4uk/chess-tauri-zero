@@ -44,6 +44,16 @@ pub fn engine_start(app: AppHandle, state: State<'_, EngineState>) -> Result<(),
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
+            // Terminated/Error mean the sidecar is gone -- clear the
+            // slot so the NEXT engine_start actually respawns it
+            // instead of engine_send silently (or now visibly) hitting
+            // a broken pipe forever. This was the real bug: once set,
+            // child_slot.is_some() never went back to false on its
+            // own, so a sidecar that died for any reason (observed:
+            // "Broken pipe (os error 32)" from a live run) left the
+            // app permanently stuck with no way to recover without a
+            // full restart.
+            let is_terminal = matches!(event, CommandEvent::Terminated(_) | CommandEvent::Error(_));
             let line = match event {
                 CommandEvent::Stdout(bytes) => Some(String::from_utf8_lossy(&bytes).to_string()),
                 CommandEvent::Stderr(bytes) => {
@@ -55,10 +65,17 @@ pub fn engine_start(app: AppHandle, state: State<'_, EngineState>) -> Result<(),
                 }
                 _ => None,
             };
+            let engine_state = app_handle.state::<EngineState>();
             if let Some(line) = line {
-                if let Ok(mut buf) = app_handle.state::<EngineState>().output.lock() {
+                if let Ok(mut buf) = engine_state.output.lock() {
                     buf.push_back(line.trim_end().to_string());
                 }
+            }
+            if is_terminal {
+                if let Ok(mut child_slot) = engine_state.child.lock() {
+                    *child_slot = None;
+                }
+                break;
             }
         }
     });
@@ -70,9 +87,21 @@ pub fn engine_start(app: AppHandle, state: State<'_, EngineState>) -> Result<(),
 pub fn engine_send(line: String, state: State<'_, EngineState>) -> Result<(), String> {
     let mut child_slot = state.child.lock().map_err(|e| e.to_string())?;
     let child = child_slot.as_mut().ok_or("engine not started")?;
-    child
-        .write((line + "\n").as_bytes())
-        .map_err(|e| e.to_string())
+    let result = child.write((line + "\n").as_bytes());
+    if result.is_err() {
+        // Write failed (e.g. broken pipe) -- the process is dead even
+        // though we haven't received its Terminated event yet. Clear
+        // the slot now so the caller's respawn-and-retry can succeed
+        // immediately instead of racing the event loop.
+        *child_slot = None;
+    }
+    result.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn engine_is_running(state: State<'_, EngineState>) -> Result<bool, String> {
+    let child_slot = state.child.lock().map_err(|e| e.to_string())?;
+    Ok(child_slot.is_some())
 }
 
 #[tauri::command]

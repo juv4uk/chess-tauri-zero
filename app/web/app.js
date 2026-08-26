@@ -89,8 +89,8 @@ async function afterHumanMove() {
   }
   thinking = true;
   setStatus("Рушій думає...");
-  await engineSend(`position startpos moves ${moveHistory.join(" ")}`);
-  await engineSend("go");
+  await reliableSend(`position startpos moves ${moveHistory.join(" ")}`);
+  await reliableSend("go");
   const bestmoveLine = await waitForLine((l) => l.startsWith("bestmove "));
   const uci = bestmoveLine.split(" ")[1];
   const move = game.move(uciToMoveInput(uci));
@@ -110,6 +110,32 @@ async function engineSend(line) {
   await invoke("engine_send", { line });
 }
 
+// The sidecar can die between commands (observed live: "Broken pipe
+// (os error 32)" on engine_send after it had answered readyok
+// earlier -- once dead, engine_start's own idempotency guard used to
+// mean it never respawned; fixed on the Rust side to clear its slot
+// on death, so a fresh engine_start here actually spawns a new
+// process). Every position command already sends the FULL move
+// history, not incremental state, so a freshly respawned+
+// re-handshaken engine picks the game back up correctly.
+async function reliableSend(line) {
+  try {
+    await engineSend(line);
+  } catch (err) {
+    setStatus("Двигун відключився, перезапускаю...");
+    await invoke("engine_start");
+    await handshake();
+    await engineSend(line);
+  }
+}
+
+async function handshake() {
+  await engineSend("uci");
+  await waitForLine((l) => l === "uciok");
+  await engineSend("isready");
+  await waitForLine((l) => l === "readyok");
+}
+
 async function waitForLine(predicate, timeoutMs = 120000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -125,10 +151,7 @@ async function waitForLine(predicate, timeoutMs = 120000) {
 async function init() {
   render();
   await invoke("engine_start");
-  await engineSend("uci");
-  await waitForLine((l) => l === "uciok");
-  await engineSend("isready");
-  await waitForLine((l) => l === "readyok");
+  await handshake();
   setStatus("Твій хід (граєш білими)");
 }
 
