@@ -11,6 +11,8 @@ Zero vX.Y.Z`, береться з `app/src-tauri/tauri.conf.json`, не хард
 |---|---|
 | `chess-tauri-zero-current-linux-x86_64` | Linux, `x86_64-unknown-linux-gnu` |
 | `chess-tauri-zero-current-windows-x86_64.exe` | Windows, `x86_64-pc-windows-msvc` (нативна збірка на `windows-latest` через GitHub Actions) |
+| `uci-engine` | Linux sidecar — **обов'язковий сусід** `chess-tauri-zero-current-linux-x86_64` (див. нижче) |
+| `uci-engine.exe` | Windows sidecar — **обов'язковий сусід** `chess-tauri-zero-current-windows-x86_64.exe` (див. нижче) |
 
 ## Як реально запускати (важливо!)
 
@@ -24,6 +26,19 @@ Provider, де CWD = тека самого `.exe`) — процес старту
 **не з'являється взагалі, без жодної помилки**, бо фронтенд-файли не
 знаходяться. Перевірено напряму: той самий бінарник відкриває вікно
 коректно лише коли CWD = `app/src-tauri/`.
+
+Другий, окремий реальний баг (знайдений і root-caused 2026-08-27 через
+`strace`, після живих репортів "os error 2: file not specified" — "одразу,
+і всюди"): sidecar (`uci-engine`/`uci-engine.exe`) резолвиться **зовсім
+інакше**, ніж `frontendDist` вище, — Tauri шукає файл із **голою назвою**
+(`uci-engine`, без суфікса target-triple) **прямо в тій самій теці, де
+лежить сам головний `.exe`**, і CWD тут ролі не грає взагалі (на відміну
+від `frontendDist`). Тобто `uci-engine`/`uci-engine.exe` у цій теці —
+**не опціональний файл, а обов'язковий сусід** головного бінарника: без
+нього рушій (тренування, гра, self-play — усе, що йде через sidecar)
+падає з `os error 2` одразу при спробі старту, незалежно від CWD.
+Підтверджено напряму через `strace -f -e trace=execve`:
+`execve("<тека-з-exe>/uci-engine", ...)`.
 
 Тому користуйся обгортками, а не самими бінарниками -- найпростіше з
 кореня репо (`start.sh`/`start.bat`, тонкі обгортки над цими самими
@@ -44,8 +59,11 @@ release\run-windows.bat
 на dev-машині відкрив вікно коректно).
 
 Обидва — portable-бінарники без Python усередині: клонуй репо,
-`.venv`/`src/` мають лишатись поруч із репозиторієм (sidecar шукає їх
-відносно `app/src-tauri/binaries/`). **Ручне налаштування `.venv` більше
+`.venv`/`src/` мають лишатись поруч із репозиторієм — сам
+`uci-engine`/`uci-engine.exe` це тонкий shell/exe-обгортка, що зсередини
+йде відносно кореня репозиторію до реального `.venv` + `src/uci_torch.py`
+(не плутати з тим, ЯК Tauri знаходить сам файл `uci-engine` — див. вище).
+**Ручне налаштування `.venv` більше
 не потрібне** — обидва скрипти самі викликають
 [`scripts/bootstrap_venv.py`](../scripts/bootstrap_venv.py) перед
 запуском: створюють `.venv`, якщо його ще немає, і ставлять залежності

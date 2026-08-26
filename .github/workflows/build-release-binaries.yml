@@ -57,6 +57,23 @@ jobs:
           name: linux-binary
           path: app/src-tauri/target/release/chess-tauri-zero-app
 
+      # Real bug found live (repo owner hit "os error 2: file not
+      # found" on Windows, independently reproduced here on Linux via
+      # strace): Tauri's sidecar resolution execve()s a BARE-named
+      # file (e.g. "uci-engine", no target-triple suffix) sitting
+      # DIRECTLY next to the running app executable's own directory --
+      # not anything in src-tauri/binaries/, regardless of naming or
+      # working directory. tauri-build's build.rs already copies the
+      # target-triple-matched externalBin into target/release/ under
+      # that bare name as a side effect of `cargo build` -- this is
+      # THAT file, confirmed via strace(execve) to be the one Tauri
+      # actually runs, and release/ needs a copy of it alongside the
+      # app binary for the exact same reason.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-sidecar
+          path: app/src-tauri/target/release/uci-engine
+
   build-windows:
     runs-on: windows-latest
     steps:
@@ -87,10 +104,26 @@ jobs:
           name: windows-binary
           path: app/src-tauri/target/release/chess-tauri-zero-app.exe
 
+      # This target-triple-named copy is only ever consulted at BUILD
+      # time (tauri-build's build.rs reads it as the externalBin source
+      # for the `cargo build` step above) -- committing it back into
+      # src-tauri/binaries/ keeps a from-scratch build reproducible, but
+      # it is never what the running app looks for. See linux-sidecar's
+      # comment above for the runtime finding this mirrors on Windows.
       - uses: actions/upload-artifact@v4
         with:
           name: windows-sidecar
           path: app/src-tauri/binaries/uci-engine-x86_64-pc-windows-msvc.exe
+
+      # THIS is the file the running app actually execve()s: the build
+      # step above triggers tauri-build to copy the externalBin into
+      # target/release/ under its bare command name, same mechanism as
+      # linux-sidecar. release/ needs a copy of this one, not the
+      # target-triple-named one above.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-sidecar-bare
+          path: app/src-tauri/target/release/uci-engine.exe
 
   test-python-and-frontend:
     runs-on: ubuntu-latest
@@ -135,6 +168,11 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          name: linux-sidecar
+          path: dl-linux-sidecar
+
+      - uses: actions/download-artifact@v4
+        with:
           name: windows-binary
           path: dl-windows
 
@@ -142,6 +180,11 @@ jobs:
         with:
           name: windows-sidecar
           path: dl-windows-sidecar
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-sidecar-bare
+          path: dl-windows-sidecar-bare
 
       - name: Commit and push if changed
         run: |
@@ -159,18 +202,27 @@ jobs:
           chmod +x release/chess-tauri-zero-current-linux-x86_64
           cp dl-windows/chess-tauri-zero-app.exe release/chess-tauri-zero-current-windows-x86_64.exe
           # Real bug found live (repo owner hit "os error 2: file not
-          # found" trying to run the CI-built exe): the MSVC-built app
-          # looks for the sidecar under its OWN target-triple name at
-          # RUNTIME (bundle.active is false, so nothing is embedded --
-          # externalBin resolution happens live, same as frontendDist),
-          # but that file was only ever generated transiently inside
-          # this job's own runner and never actually committed to the
-          # repo a clone would have on disk. Committing it here closes
-          # that gap the same way the app binaries themselves are kept
-          # current.
+          # found" immediately, on every run) and root-caused via strace
+          # on this Linux dev machine: Tauri's sidecar resolution
+          # execve()s a BARE-named file ("uci-engine"/"uci-engine.exe",
+          # no target-triple suffix) sitting DIRECTLY next to the app
+          # executable's own directory -- not anything under
+          # src-tauri/binaries/, and not affected by CWD (frontendDist
+          # is CWD-relative, the sidecar is not -- two different
+          # mechanisms). release/ never contained this bare-named file,
+          # so the sidecar could never spawn no matter what else was
+          # correct. These two lines are the actual fix.
+          cp dl-linux-sidecar/uci-engine release/uci-engine
+          chmod +x release/uci-engine
+          cp dl-windows-sidecar-bare/uci-engine.exe release/uci-engine.exe
+          # Target-triple-named copy: only ever consulted at BUILD time
+          # (tauri-build's build.rs externalBin source) -- committed so
+          # a from-scratch build stays reproducible, not because the
+          # running app reads it.
           cp dl-windows-sidecar/uci-engine-x86_64-pc-windows-msvc.exe \
              app/src-tauri/binaries/uci-engine-x86_64-pc-windows-msvc.exe
           git add release/chess-tauri-zero-current-linux-x86_64 release/chess-tauri-zero-current-windows-x86_64.exe \
+                  release/uci-engine release/uci-engine.exe \
                   app/src-tauri/binaries/uci-engine-x86_64-pc-windows-msvc.exe
           if git diff --cached --quiet; then
             echo "Binaries unchanged, nothing to commit."
