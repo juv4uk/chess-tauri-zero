@@ -14,6 +14,7 @@
 //! against a specific pending request.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager, State};
@@ -24,6 +25,12 @@ use tauri_plugin_shell::ShellExt;
 pub struct EngineState {
     child: Mutex<Option<CommandChild>>,
     output: Mutex<VecDeque<String>>,
+    // Bumped every time a new child is installed into `child`. Each
+    // spawn's own event-loop task below captures the value it was
+    // given at spawn time and only clears the slot on termination if
+    // that's STILL the current generation -- see engine_start's own
+    // comment for the real race this closes.
+    generation: AtomicU64,
 }
 
 #[tauri::command]
@@ -39,6 +46,11 @@ pub fn engine_start(app: AppHandle, state: State<'_, EngineState>) -> Result<(),
         .map_err(|e| e.to_string())?;
     let (mut rx, child) = sidecar.spawn().map_err(|e| e.to_string())?;
     *child_slot = Some(child);
+    // Incremented while still holding child_slot's lock, so this is
+    // correctly ordered against any concurrent engine_start call (they
+    // serialize on the same lock) -- this generation value uniquely
+    // identifies THIS spawn for the event-loop task below.
+    let my_generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
     drop(child_slot);
 
     let app_handle = app.clone();
@@ -53,6 +65,19 @@ pub fn engine_start(app: AppHandle, state: State<'_, EngineState>) -> Result<(),
             // "Broken pipe (os error 32)" from a live run) left the
             // app permanently stuck with no way to recover without a
             // full restart.
+            //
+            // Real, CONFIRMED race found in today's 4-agent audit
+            // (Rust/Tauri Auditor): engine_kill() (added the same
+            // session as this fix) kills the live child out-of-band --
+            // if THIS task's Terminated event for that kill arrives
+            // AFTER a subsequent engine_start already installed a
+            // fresh, live child in the slot, the unconditional
+            // `*child_slot = None` below used to wipe out that new,
+            // healthy child -- an orphaned, untrackable sidecar
+            // process with no way to kill or respawn it short of a
+            // full app restart. Gated on the generation check so a
+            // stale task can only ever clear the slot for ITS OWN
+            // spawn, never a newer one.
             let is_terminal = matches!(event, CommandEvent::Terminated(_) | CommandEvent::Error(_));
             let line = match event {
                 CommandEvent::Stdout(bytes) => Some(String::from_utf8_lossy(&bytes).to_string()),
@@ -73,7 +98,9 @@ pub fn engine_start(app: AppHandle, state: State<'_, EngineState>) -> Result<(),
             }
             if is_terminal {
                 if let Ok(mut child_slot) = engine_state.child.lock() {
-                    *child_slot = None;
+                    if engine_state.generation.load(Ordering::SeqCst) == my_generation {
+                        *child_slot = None;
+                    }
                 }
                 break;
             }
@@ -106,8 +133,9 @@ pub fn engine_kill(state: State<'_, EngineState>) -> Result<(), String> {
     // does nothing (child_slot.is_some() short-circuits it). This is
     // the actual "force stop": kills the live process outright so the
     // next engine_start spawns a fresh one. Used by the frontend's
-    // Escape handler for the two modes (thinking/train) that have no
-    // graceful stop of their own, unlike selfplay's `selfplay stop`.
+    // Escape handler for all three busy modes (thinking/train/selfplay)
+    // as a hard panic-key stop, distinct from selfplay's own graceful
+    // `selfplay stop` UCI command (still used by its dedicated button).
     //
     // Windows nuance, not fully solved here: the Windows sidecar
     // (uci-engine-launcher.exe) spawns python.exe as a CHILD process
@@ -121,6 +149,21 @@ pub fn engine_kill(state: State<'_, EngineState>) -> Result<(), String> {
     let mut child_slot = state.child.lock().map_err(|e| e.to_string())?;
     if let Some(child) = child_slot.take() {
         child.kill().map_err(|e| e.to_string())?;
+    }
+    drop(child_slot);
+    // Also drop whatever's still buffered from the killed session --
+    // partial cross-check finding from today's audit (Rust/Tauri
+    // Auditor, prompted by the Frontend Auditor's own finding): a
+    // stale JS poll loop left over from before the kill can otherwise
+    // keep draining leftover lines (or, on Windows specifically, lines
+    // an orphaned grandchild python.exe is still writing -- see this
+    // function's own doc comment above) and misread them as belonging
+    // to the NEW session. This does not fully close that race (the
+    // frontend's own poll loop isn't cancelled by this alone -- a
+    // separate, not-yet-done fix), but removes the specific stale data
+    // this command can reach.
+    if let Ok(mut buf) = state.output.lock() {
+        buf.clear();
     }
     Ok(())
 }
