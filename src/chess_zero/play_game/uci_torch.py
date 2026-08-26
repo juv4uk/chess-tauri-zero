@@ -548,13 +548,28 @@ def _dispatch(words, env):
         # live -- mirrors that fix's own mutual-exclusion pattern,
         # since mutating shared model weights mid-search/mid-training
         # would be exactly the race that fix closed for promotion.
-        if _train_thread is not None and _train_thread.is_alive():
-            print("resetmodelresult error training running")
-        elif _selfplay_thread is not None and _selfplay_thread.is_alive():
-            print("resetmodelresult error selfplay running")
-        else:
-            reset_model_to_scratch()
-            print("resetmodelresult ok")
+        #
+        # Real TOCTOU race found in today's round-2 audit (Python
+        # Logic Auditor): the check-then-reset used to run WITHOUT
+        # _train_lock, but _background_train_loop does its own
+        # independent check-and-start of _train_thread under
+        # _train_lock every BG_CHECK_INTERVAL_SEC on a separate
+        # thread -- a background cycle could start in the narrow
+        # window between this handler's check and reset_model_to_
+        # scratch() actually running, mutating the SAME _shared_model
+        # object reset_model_to_scratch() is concurrently rewriting.
+        # Holding _train_lock for the whole check+reset here closes
+        # it: whichever side acquires the lock first is the one that
+        # sees accurate state, the other correctly detects a
+        # conflict instead of racing.
+        with _train_lock:
+            if _train_thread is not None and _train_thread.is_alive():
+                print("resetmodelresult error training running")
+            elif _selfplay_thread is not None and _selfplay_thread.is_alive():
+                print("resetmodelresult error selfplay running")
+            else:
+                reset_model_to_scratch()
+                print("resetmodelresult ok")
         sys.stdout.flush()
     elif words[0] == "humanmove":
         # "humanmove <fen-before-move, 6 space-separated fields> <uci
