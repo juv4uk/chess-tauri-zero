@@ -249,107 +249,133 @@ def start():
     threading.Thread(target=_background_train_loop, daemon=True).start()
 
     while True:
-        line = input()
-        words = line.rstrip().split(" ", 1)
-        if words[0] == "uci":
-            print("id name ChessZeroTorch")
-            print("id author ChessZero (PyTorch port)")
-            print("uciok")
-        elif words[0] == "isready":
-            if not me_player:
-                me_player = get_player()
-            print("readyok")
-        elif words[0] == "ucinewgame":
-            env.reset()
-        elif words[0] == "position":
-            _mark_human_activity()
-            words = words[1].split(" ", 1)
-            if words[0] == "startpos":
-                env.reset()
-            else:
-                if words[0] == "fen":
-                    words = words[1].split(' ', 1)
-                fen = words[0]
-                for _ in range(5):
-                    words = words[1].split(' ', 1)
-                    fen += " " + words[0]
-                env.update(fen)
-            if len(words) > 1:
-                words = words[1].split(" ", 1)
-                if words[0] == "moves":
-                    for w in words[1].split(" "):
-                        env.step(w, False)
-        elif words[0] == "go":
-            _mark_human_activity()
-            if not me_player:
-                me_player = get_player()
-            action = me_player.action(env, False)
-            print(f"info mctsroot {json.dumps(me_player.root_stats(env))}")
-            print(f"bestmove {action}")
-            sys.stdout.flush()
-        elif words[0] == "setoption":
-            # "setoption name Simulations value <N>" -- difficulty control,
-            # only Simulations is recognized, anything else is ignored.
-            rest = words[1] if len(words) > 1 else ""
-            if rest.startswith("name "):
-                rest = rest[len("name "):]
-                if " value " in rest:
-                    name_part, value_part = rest.split(" value ", 1)
-                    if name_part.strip() == "Simulations":
-                        try:
-                            n = int(value_part.strip())
-                        except ValueError:
-                            n = None
-                        if n is not None:
-                            if not me_player:
-                                me_player = get_player()
-                            me_player.play_config.simulation_num_per_move = n
-        elif words[0] == "selfplay":
-            sub = words[1].strip() if len(words) > 1 else ""
-            if sub == "start":
-                if _selfplay_thread is None or not _selfplay_thread.is_alive():
-                    _selfplay_stop_event.clear()
-                    model = get_shared_model()
-                    _selfplay_thread = threading.Thread(
-                        target=_selfplay_worker, args=(model, _selfplay_stop_event), daemon=True)
-                    _selfplay_thread.start()
-                # already running: ignored, per spec (no second instance)
-            elif sub == "stop":
-                _selfplay_stop_event.set()
-        elif words[0] == "train":
-            sub = words[1].strip() if len(words) > 1 else ""
-            if sub == "start":
-                with _train_lock:
-                    running = _train_thread is not None and _train_thread.is_alive()
-                    if running:
-                        print("trainerror already running")
-                        sys.stdout.flush()
-                    elif machine_busy():
-                        print("trainerror machine busy, try again later")
-                        sys.stdout.flush()
-                    else:
-                        _train_thread = threading.Thread(target=_train_worker, daemon=True)
-                        _train_thread.start()
-        elif words[0] == "history":
-            # P0 "generation journal + quality curve": one line per
-            # promoted cycle (cycle/win_rate/promoted_at), oldest first.
-            for record in model_history():
-                print(f"historyentry {json.dumps(record)}")
-            print("historyresult ok")
-            sys.stdout.flush()
-        elif words[0] == "reload":
-            # Hot-reload the live player (and shared selfplay/train model)
-            # from data/model_torch/model_best.pt if a promoted checkpoint
-            # exists, without restarting the process.
-            if not me_player:
-                me_player = get_player()
-            found = reload_models(get_shared_model(), me_player.model)
-            print(f"reloadresult {'ok' if found else 'nothing-to-reload'}")
-            sys.stdout.flush()
-        elif words[0] == "stop":
-            pass
-        elif words[0] == "quit":
+        try:
+            line = input()
+        except EOFError:
             break
+        words = line.rstrip().split(" ", 1)
+        try:
+            _dispatch(words, env)
+        except _Quit:
+            break
+        except Exception as e:
+            # A real, live-reported bug this fix responds to: any
+            # uncaught exception ANYWHERE in command handling used to
+            # kill the WHOLE process (input() loop had no guard at
+            # all), which the frontend then reported as "Двигун
+            # відключився, перезапускаю..." (broken pipe) and silently
+            # respawned -- masking the real error instead of surfacing
+            # it. Now one bad command reports itself and the engine
+            # keeps running.
+            print(f"info error {e}")
+            sys.stdout.flush()
+
+
+class _Quit(Exception):
+    pass
+
+
+def _dispatch(words, env):
+    global _selfplay_thread, _train_thread, me_player
+    if words[0] == "uci":
+        print("id name ChessZeroTorch")
+        print("id author ChessZero (PyTorch port)")
+        print("uciok")
+    elif words[0] == "isready":
+        if not me_player:
+            me_player = get_player()
+        print("readyok")
+    elif words[0] == "ucinewgame":
+        env.reset()
+    elif words[0] == "position":
+        _mark_human_activity()
+        words = words[1].split(" ", 1)
+        if words[0] == "startpos":
+            env.reset()
+        else:
+            if words[0] == "fen":
+                words = words[1].split(' ', 1)
+            fen = words[0]
+            for _ in range(5):
+                words = words[1].split(' ', 1)
+                fen += " " + words[0]
+            env.update(fen)
+        if len(words) > 1:
+            words = words[1].split(" ", 1)
+            if words[0] == "moves":
+                for w in words[1].split(" "):
+                    env.step(w, False)
+    elif words[0] == "go":
+        _mark_human_activity()
+        if not me_player:
+            me_player = get_player()
+        action = me_player.action(env, False)
+        print(f"info mctsroot {json.dumps(me_player.root_stats(env))}")
+        print(f"bestmove {action}")
+        sys.stdout.flush()
+    elif words[0] == "setoption":
+        # "setoption name Simulations value <N>" -- difficulty control,
+        # only Simulations is recognized, anything else is ignored.
+        rest = words[1] if len(words) > 1 else ""
+        if rest.startswith("name "):
+            rest = rest[len("name "):]
+            if " value " in rest:
+                name_part, value_part = rest.split(" value ", 1)
+                if name_part.strip() == "Simulations":
+                    try:
+                        n = int(value_part.strip())
+                    except ValueError:
+                        n = None
+                    if n is not None:
+                        if not me_player:
+                            me_player = get_player()
+                        me_player.play_config.simulation_num_per_move = n
+    elif words[0] == "selfplay":
+        sub = words[1].strip() if len(words) > 1 else ""
+        if sub == "start":
+            if _selfplay_thread is None or not _selfplay_thread.is_alive():
+                _selfplay_stop_event.clear()
+                model = get_shared_model()
+                _selfplay_thread = threading.Thread(
+                    target=_selfplay_worker, args=(model, _selfplay_stop_event), daemon=True)
+                _selfplay_thread.start()
+            # already running: ignored, per spec (no second instance)
+        elif sub == "stop":
+            _selfplay_stop_event.set()
+    elif words[0] == "train":
+        sub = words[1].strip() if len(words) > 1 else ""
+        if sub == "start":
+            with _train_lock:
+                running = _train_thread is not None and _train_thread.is_alive()
+                if running:
+                    print("trainerror already running")
+                    sys.stdout.flush()
+                elif machine_busy():
+                    print("trainerror machine busy, try again later")
+                    sys.stdout.flush()
+                else:
+                    _train_thread = threading.Thread(target=_train_worker, daemon=True)
+                    _train_thread.start()
+    elif words[0] == "history":
+        # P0 "generation journal + quality curve": one line per
+        # evaluated cycle (promoted or rejected), oldest first.
+        for record in model_history():
+            print(f"historyentry {json.dumps(record)}")
+        print("historyresult ok")
+        sys.stdout.flush()
+    elif words[0] == "reload":
+        # Hot-reload the live player (and shared selfplay/train model)
+        # from data/model_torch/model_best.pt if a promoted checkpoint
+        # exists, without restarting the process.
+        if not me_player:
+            me_player = get_player()
+        found = reload_models(get_shared_model(), me_player.model)
+        print(f"reloadresult {'ok' if found else 'nothing-to-reload'}")
+        sys.stdout.flush()
+    elif words[0] == "stop":
+        pass
+    elif words[0] == "quit":
+        raise _Quit()
 
 
 if __name__ == "__main__":
