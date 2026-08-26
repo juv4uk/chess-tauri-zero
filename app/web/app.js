@@ -7,13 +7,33 @@ const PIECE_GLYPH = {
   bk: "♚", bq: "♛", br: "♜", bb: "♝", bn: "♞", bp: "♟",
 };
 
+// Difficulty -> MCTS simulations-per-move sent as "setoption name Simulations value <N>".
+const DIFFICULTY = { easy: 10, medium: 50, hard: 200 };
+
 const boardEl = document.getElementById("board");
 const statusEl = document.getElementById("status");
+const trainLogEl = document.getElementById("train-log");
+const colorButtons = document.querySelectorAll("[data-color]");
+const difficultyButtons = document.querySelectorAll("[data-difficulty]");
+const newGameBtn = document.getElementById("btn-new-game");
+const resignBtn = document.getElementById("btn-resign");
+const undoBtn = document.getElementById("btn-undo");
+const selfplayBtn = document.getElementById("btn-selfplay");
+const trainBtn = document.getElementById("btn-train");
 
 const game = new Chess();
 const moveHistory = []; // UCI strings, sent to the engine as "position startpos moves ..."
 let selected = null; // algebraic square string, e.g. "e2"
-let thinking = false;
+let humanColor = "w"; // "w" or "b" -- which side the human plays in normal (non-selfplay) mode
+let difficulty = "medium";
+let resigned = false;
+
+// Single exclusive busy state covers "engine thinking on a human move",
+// self-play spectator mode, and training -- only one of these makes
+// sense at a time, and every user-triggered action below checks this
+// instead of a separate flag per mode.
+let mode = "idle"; // "idle" | "thinking" | "selfplay" | "train"
+let selfplayStopRequested = false;
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -51,11 +71,16 @@ function render() {
       boardEl.appendChild(el);
     }
   }
+  updateControlsEnabled();
+}
+
+function isOver() {
+  return resigned || game.isGameOver();
 }
 
 async function onSquareClick(square) {
-  if (thinking || game.isGameOver()) return;
-  if (game.turn() !== "w") return; // human always plays white here
+  if (mode !== "idle" || isOver()) return;
+  if (game.turn() !== humanColor) return;
 
   const piece = game.get(square);
 
@@ -67,27 +92,31 @@ async function onSquareClick(square) {
       moveHistory.push(move.lan ?? `${selected}${square}`);
       selected = null;
       render();
-      await afterHumanMove();
+      await requestEngineMove();
       return;
     }
     // clicking a different own piece re-selects instead of illegal move
-    selected = piece && piece.color === "w" ? square : null;
+    selected = piece && piece.color === humanColor ? square : null;
     render();
     return;
   }
 
-  if (piece && piece.color === "w") {
+  if (piece && piece.color === humanColor) {
     selected = square;
     render();
   }
 }
 
-async function afterHumanMove() {
-  if (game.isGameOver()) {
+// Asks the engine for its move in the current position and applies it.
+// Used both after a human move and, when the human plays Black, to make
+// the engine's opening move on a fresh game.
+async function requestEngineMove() {
+  if (isOver()) {
     setStatus(gameOverMessage());
     return;
   }
-  thinking = true;
+  mode = "thinking";
+  updateControlsEnabled();
   setStatus("Рушій думає...");
   await reliableSend(`position startpos moves ${moveHistory.join(" ")}`);
   await reliableSend("go");
@@ -95,12 +124,13 @@ async function afterHumanMove() {
   const uci = bestmoveLine.split(" ")[1];
   const move = game.move(uciToMoveInput(uci));
   moveHistory.push(move.lan ?? uci);
-  thinking = false;
+  mode = "idle";
   render();
-  setStatus(game.isGameOver() ? gameOverMessage() : "Твій хід");
+  setStatus(isOver() ? gameOverMessage() : "Твій хід");
 }
 
 function gameOverMessage() {
+  if (resigned) return "Ти здався.";
   if (game.isCheckmate()) return `Мат! Переміг ${game.turn() === "w" ? "чорний" : "білий"}.`;
   if (game.isDraw()) return "Нічия.";
   return "Гру завершено.";
@@ -125,6 +155,7 @@ async function reliableSend(line) {
     setStatus("Двигун відключився, перезапускаю...");
     await invoke("engine_start");
     await handshake();
+    await applyDifficulty();
     await engineSend(line);
   }
 }
@@ -148,10 +179,184 @@ async function waitForLine(predicate, timeoutMs = 120000) {
   throw new Error("Тайм-аут очікування відповіді рушія");
 }
 
+// Like waitForLine, but calls onLine for every line seen (not just the
+// terminal one) -- used for selfplay/train streams where intermediate
+// lines (selfplaymove/trainprogress) matter, not just the final result.
+async function pollUntil(matchPredicate, onLine, timeoutMs = 600000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const lines = await invoke("engine_drain");
+    for (const line of lines) {
+      onLine(line);
+      if (matchPredicate(line)) return line;
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error("Тайм-аут очікування відповіді рушія");
+}
+
+async function applyDifficulty() {
+  await engineSend(`setoption name Simulations value ${DIFFICULTY[difficulty]}`);
+}
+
+function updateControlsEnabled() {
+  const busy = mode !== "idle";
+  const over = isOver();
+  newGameBtn.disabled = busy;
+  resignBtn.disabled = busy || over;
+  undoBtn.disabled = busy || moveHistory.length < 2;
+  selfplayBtn.disabled = mode === "thinking" || mode === "train";
+  selfplayBtn.textContent = mode === "selfplay" ? "Зупинити самогру" : "Дивитись самогру";
+  // No "stop training" affordance in this scope (train runs one bounded
+  // cycle to completion) -- disabled for the whole busy window, not just
+  // while some OTHER mode is active.
+  trainBtn.disabled = busy;
+  colorButtons.forEach((b) => (b.disabled = busy));
+  difficultyButtons.forEach((b) => {
+    b.disabled = busy;
+    b.classList.toggle("active", b.dataset.difficulty === difficulty);
+  });
+  colorButtons.forEach((b) => b.classList.toggle("active", b.dataset.color === humanColor));
+}
+
+async function newGame() {
+  if (mode !== "idle") return;
+  mode = "thinking"; // blocks other controls during ucinewgame/setoption round-trip
+  updateControlsEnabled();
+  game.reset();
+  moveHistory.length = 0;
+  selected = null;
+  resigned = false;
+  render();
+  await reliableSend("ucinewgame");
+  await applyDifficulty();
+  if (humanColor === "b") {
+    await requestEngineMove(); // sets mode back to "idle" itself when done
+  } else {
+    mode = "idle";
+    render();
+    setStatus("Твій хід");
+  }
+}
+
+function resign() {
+  if (mode !== "idle" || isOver()) return;
+  resigned = true;
+  setStatus(gameOverMessage());
+  updateControlsEnabled();
+}
+
+function undo() {
+  if (mode !== "idle" || moveHistory.length < 2) return;
+  game.undo();
+  game.undo();
+  moveHistory.pop();
+  moveHistory.pop();
+  resigned = false;
+  selected = null;
+  render();
+  setStatus("Твій хід");
+}
+
+async function toggleSelfplay() {
+  if (mode === "selfplay") {
+    selfplayStopRequested = true;
+    setStatus("Зупиняю самогру (двигун завершить поточний хід)...");
+    await reliableSend("selfplay stop");
+    return;
+  }
+  if (mode !== "idle") return;
+
+  mode = "selfplay";
+  selfplayStopRequested = false;
+  selected = null;
+  game.reset();
+  moveHistory.length = 0;
+  resigned = false;
+  render();
+  setStatus("Самогра...");
+
+  await reliableSend("selfplay start");
+  try {
+    await pollUntil(
+      (line) => line.startsWith("selfplayresult "),
+      (line) => {
+        if (line.startsWith("selfplaymove ")) {
+          const uci = line.slice("selfplaymove ".length).trim();
+          const move = game.move(uciToMoveInput(uci));
+          if (move) {
+            moveHistory.push(move.lan ?? uci);
+            render();
+          }
+        }
+      }
+    );
+    setStatus(`Самогра завершена: ${gameOverMessage()}`);
+  } catch (err) {
+    setStatus(`Помилка самогри: ${err}`);
+  } finally {
+    mode = "idle";
+    updateControlsEnabled();
+  }
+}
+
+async function startTraining() {
+  if (mode !== "idle") return;
+  mode = "train";
+  updateControlsEnabled();
+  trainLogEl.textContent = "";
+  setStatus("Тренування...");
+
+  await reliableSend("train start");
+  try {
+    const resultLine = await pollUntil(
+      (line) =>
+        line.startsWith("trainresult ") || line.startsWith("trainerror "),
+      (line) => {
+        if (line.startsWith("info trainprogress ")) {
+          trainLogEl.textContent += line.slice("info trainprogress ".length).trim() + "\n";
+        }
+      }
+    );
+    if (resultLine.startsWith("trainerror ")) {
+      setStatus(`Тренування: ${resultLine.slice("trainerror ".length)}`);
+    } else {
+      setStatus(`Тренування завершено: ${resultLine.slice("trainresult ".length)}`);
+    }
+  } catch (err) {
+    setStatus(`Помилка тренування: ${err}`);
+  } finally {
+    mode = "idle";
+    updateControlsEnabled();
+  }
+}
+
+colorButtons.forEach((b) =>
+  b.addEventListener("click", () => {
+    if (mode !== "idle") return;
+    humanColor = b.dataset.color;
+    updateControlsEnabled();
+  })
+);
+difficultyButtons.forEach((b) =>
+  b.addEventListener("click", async () => {
+    if (mode !== "idle") return;
+    difficulty = b.dataset.difficulty;
+    updateControlsEnabled();
+    await applyDifficulty();
+  })
+);
+newGameBtn.addEventListener("click", newGame);
+resignBtn.addEventListener("click", resign);
+undoBtn.addEventListener("click", undo);
+selfplayBtn.addEventListener("click", toggleSelfplay);
+trainBtn.addEventListener("click", startTraining);
+
 async function init() {
   render();
   await invoke("engine_start");
   await handshake();
+  await applyDifficulty();
   setStatus("Твій хід (граєш білими)");
 }
 

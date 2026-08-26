@@ -35,12 +35,80 @@
     .selected { outline: 3px solid #4ac; outline-offset: -3px; }
     .legal { box-shadow: inset 0 0 0 4px rgba(74, 200, 120, 0.7); }
     #status { font-size: 16px; min-height: 24px; }
+
+    #controls {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: 320px;
+    }
+    .control-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .control-row .row-label {
+      font-size: 12px;
+      color: #999;
+      width: 72px;
+      flex-shrink: 0;
+    }
+    button {
+      background: #333;
+      color: #eee;
+      border: 1px solid #555;
+      border-radius: 4px;
+      padding: 6px 10px;
+      font-size: 13px;
+      cursor: pointer;
+      flex: 1;
+    }
+    button:hover:not(:disabled) { background: #444; }
+    button:disabled { opacity: 0.4; cursor: default; }
+    button.active { background: #2c5a2c; border-color: #4ac; }
+    #btn-resign { flex: none; }
+    #btn-undo { flex: none; }
+    #train-log {
+      font-size: 11px;
+      color: #9c9;
+      white-space: pre-wrap;
+      min-height: 14px;
+      max-height: 80px;
+      overflow-y: auto;
+    }
   </style>
 </head>
 <body>
   <h2>Chess Tauri Zero</h2>
   <div id="status">Ініціалізація рушія...</div>
   <div id="board"></div>
+
+  <div id="controls">
+    <div class="control-row">
+      <span class="row-label">Колір</span>
+      <button data-color="w" class="active">Білі</button>
+      <button data-color="b">Чорні</button>
+    </div>
+    <div class="control-row">
+      <span class="row-label">Складність</span>
+      <button data-difficulty="easy">Легко</button>
+      <button data-difficulty="medium" class="active">Середньо</button>
+      <button data-difficulty="hard">Важко</button>
+    </div>
+    <div class="control-row">
+      <button id="btn-new-game">Нова партія</button>
+      <button id="btn-undo">Скасувати хід</button>
+      <button id="btn-resign">Здатись</button>
+    </div>
+    <div class="control-row">
+      <button id="btn-selfplay">Дивитись самогру</button>
+    </div>
+    <div class="control-row">
+      <button id="btn-train">Тренування (1 цикл)</button>
+    </div>
+    <div id="train-log"></div>
+  </div>
+
   <script type="module" src="app.js"></script>
 </body>
 </html>
