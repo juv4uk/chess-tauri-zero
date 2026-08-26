@@ -25,7 +25,7 @@ PyTorch-порт (2026)
 cd chess-tauri-zero
 python3 -m venv .venv
 source .venv/bin/activate
-pip install h5py numpy python-chess
+pip install h5py numpy chess
 
 # GPU: якщо карта старша (compute capability < 7.5, напр. GTX 1050 Ti / sm_61) --
 # звичайний "pip install torch" ставить збірку без ядер під таку архітектуру
