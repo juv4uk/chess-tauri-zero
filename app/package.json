@@ -1,0 +1,16 @@
+{
+  "name": "chess-tauri-zero-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tauri desktop shell for chess-tauri-zero's PyTorch AlphaZero engine",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "dependencies": {
+    "chess.js": "^1.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

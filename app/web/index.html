@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chess Tauri Zero</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #1e1e1e;
+      color: #eee;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 20px;
+    }
+    #board {
+      display: grid;
+      grid-template-columns: repeat(8, 64px);
+      grid-template-rows: repeat(8, 64px);
+      border: 2px solid #444;
+    }
+    .square {
+      width: 64px;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 40px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .light { background: #eee0c0; color: #222; }
+    .dark { background: #7a5c3e; color: #111; }
+    .selected { outline: 3px solid #4ac; outline-offset: -3px; }
+    .legal { box-shadow: inset 0 0 0 4px rgba(74, 200, 120, 0.7); }
+    #status { font-size: 16px; min-height: 24px; }
+  </style>
+</head>
+<body>
+  <h2>Chess Tauri Zero</h2>
+  <div id="status">Ініціалізація рушія...</div>
+  <div id="board"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Chess Tauri Zero",
+  "version": "0.1.0",
+  "identifier": "io.juv4uk.chess-tauri-zero",
+  "build": {
+    "frontendDist": "../web"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Chess Tauri Zero",
+        "width": 900,
+        "height": 900,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "createUpdaterArtifacts": false,
+    "externalBin": ["binaries/uci-engine"]
+  }
+}

@@ -23,3 +23,11 @@ tmp.*
 video/*
 logs/
 *.sh
+
+# Tauri app (app/) build/dependency output -- generated, not source.
+/app/node_modules/
+/app/src-tauri/target/
+/app/src-tauri/gen/
+# Tauri requires icon.png to exist (tauri::generate_context! fails
+# without it, confirmed) -- exception to the blanket *.png rule above.
+!/app/src-tauri/icons/*.png
