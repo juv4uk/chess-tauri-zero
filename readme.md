@@ -132,6 +132,14 @@ release\run-windows.bat         # Windows (PowerShell/cmd)
 в [`release/README.md`](release/README.md). Спочатку перевір усе
 середовище одною командою: `python src/smoke_test.py`.
 
+**Якщо готовий `.exe` блокує Windows Device Guard/WDAC** (керована
+машина, повідомлення "blocked by your organization's Device Guard
+policy") — готовий бінарник тут не допоможе незалежно від підпису.
+Збери локально своїм інструментарієм:
+[`docs/windows-local-build-uk.md`](docs/windows-local-build-uk.md)
+(`scripts\build-and-run-windows.bat` робить це одною командою після
+одноразового встановлення Rust).
+
 ## Що ще НЕ реалізовано (чесно)
 
 - **Масштабна self-play інфраструктура** — оригінал ганяв нескінченний пул
