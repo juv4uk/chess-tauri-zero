@@ -139,8 +139,21 @@ def _selfplay_worker(model, stop_event):
         if not env.done:
             env.adjudicate()  # covers both the halfmove cap and an explicit stop mid-game
         print(f"selfplayresult {env.result}")
-        sys.stdout.flush()
+    except Exception as e:
+        # Real, confirmed bug this responds to: this whole function runs
+        # on its own daemon thread, outside the main loop's `_dispatch`
+        # try/except added earlier -- an uncaught exception here used to
+        # just kill the thread silently (traceback to stderr only), so
+        # `selfplayresult` was NEVER printed and the frontend's
+        # `pollUntil` waiting on it hung for its full 600s timeout with
+        # zero feedback. "*" is the standard PGN "unknown/unfinished
+        # result" marker -- distinct from a real 1-0/0-1/1/2-1/2 -- so a
+        # client that DOES start caring about the value later can tell
+        # "crashed" apart from "actually finished".
+        print(f"info error [selfplay] {e}")
+        print("selfplayresult *")
     finally:
+        sys.stdout.flush()
         predictor.stop()
 
 
