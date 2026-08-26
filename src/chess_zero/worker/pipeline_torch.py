@@ -110,12 +110,22 @@ def record_cycle_result(cycle_idx, win_rate, promoted):
     no data for a future lineage view). Rejected candidates' WEIGHTS
     still aren't kept (that candidate_model is discarded when run_cycle
     returns best_model unchanged) -- only the small win_rate/promoted
-    record, which is what "history" actually needs to show."""
+    record, which is what "history" actually needs to show.
+
+    parent: the cycle id of the most recently PROMOTED record at the
+    time of this attempt (None if nothing has ever been promoted yet,
+    i.e. this attempt's baseline is the pretrained h5 weights, not a
+    recorded cycle). Several rejected attempts can share the same
+    parent while none of them beats it yet -- this one field turns the
+    flat journal into an actual lineage: every node's parent is
+    whichever promoted cycle was current best_model when THIS attempt
+    was evaluated against it."""
     os.makedirs(NEXT_GEN_DIR, exist_ok=True)
     record = {
         "cycle": cycle_idx,
         "win_rate": win_rate,
         "promoted": promoted,
+        "parent": _last_promoted_cycle(),
         "evaluated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     record_path = os.path.join(NEXT_GEN_DIR, f"model_cycle{cycle_idx}.json")
@@ -137,6 +147,14 @@ def model_history():
             records.append(json.load(f))
     records.sort(key=lambda r: r["cycle"])
     return records
+
+
+def _last_promoted_cycle():
+    """cycle id of the most recently promoted record so far, or None
+    if nothing has ever been promoted (the chain's root is then the
+    pretrained h5 baseline, not any recorded cycle)."""
+    promoted = [r["cycle"] for r in model_history() if r["promoted"]]
+    return max(promoted) if promoted else None
 
 
 if __name__ == "__main__":
