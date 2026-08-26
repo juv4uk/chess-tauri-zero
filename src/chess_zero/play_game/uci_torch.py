@@ -38,11 +38,38 @@ def get_player():
     return TorchChessPlayer(model, human_play_config())
 
 
-# --- shared model for selfplay/train, separate from get_player()'s own
-# model -- get_player() is left untouched (existing, verified behavior),
-# so selfplay/train load+cache their own reference instead of reusing it.
+def machine_busy():
+    """os.getloadavg() is POSIX-only -- raises on Windows (confirmed
+    live: the owner's own Windows run would have crashed the whole UCI
+    process here, uncaught, the moment `train start` was sent). No
+    stdlib equivalent exists for Windows, so this degrades to "never
+    busy" there rather than adding a new dependency (psutil) just for
+    a nice-to-have safety check -- the check still protects the Linux
+    dev machine, which is where it was actually needed."""
+    try:
+        load1 = os.getloadavg()[0]
+    except (AttributeError, OSError):
+        return False
+    cores = os.cpu_count() or 1
+    return load1 > cores * 1.5
+
+
+# --- shared model for selfplay/train/play. Loaded once from the
+# original h5 weights, then reloaded in place from
+# data/model_torch/model_best.pt (state_dict) whenever `reload` is
+# received or a `train start` promotes a new candidate -- see reload().
+# get_player()'s own model is a SEPARATE instance still loaded fresh
+# from the h5 file each time (existing, verified behavior, untouched);
+# reload() updates get_player()'s cached instance too if one exists,
+# so a human game in progress also picks up a promoted model without
+# restarting the whole process.
 _shared_model = None
 _shared_model_lock = threading.Lock()
+
+# The live player used for normal `go` moves -- module-level (not
+# start()-local) so a background thread (train promotion) can hot-reload
+# its .model in place. None until the first `isready`/`go`/`setoption`.
+me_player = None
 
 
 def get_shared_model():
@@ -51,6 +78,34 @@ def get_shared_model():
         if _shared_model is None:
             _shared_model = load_torch_model("../data/model/model_best_weight.h5")
     return _shared_model
+
+
+def current_best_checkpoint():
+    """data/model_torch/model_best.pt if a promoted checkpoint exists
+    (torch.save(state_dict) format, written by optimize_torch.save_checkpoint),
+    else None -- caller falls back to the original h5 weights."""
+    import os as _os
+    path = "../data/model_torch/model_best.pt"
+    return path if _os.path.exists(path) else None
+
+
+def reload_models(*models):
+    """Loads the current best checkpoint's state_dict into every given
+    model in place (torch.load + load_state_dict) -- same architecture
+    (ChessResNet) whether it came from the h5 weights or a previous
+    checkpoint, so this works uniformly. Returns True if a checkpoint
+    was found and loaded, False if there was nothing newer than the
+    original h5 weights to load."""
+    import torch
+    ckpt = current_best_checkpoint()
+    if ckpt is None:
+        return False
+    for model in models:
+        if model is None:
+            continue
+        device = next(model.parameters()).device
+        model.load_state_dict(torch.load(ckpt, map_location=device))
+    return True
 
 
 # --- selfplay: two TorchChessPlayers sharing one model/predictor play
@@ -86,10 +141,13 @@ def _selfplay_worker(model, stop_event):
 
 
 # --- train: one bounded pipeline_torch.run_cycle(), streaming phase
-# progress. Does NOT hot-swap _shared_model or get_player()'s model on
-# promotion -- a promoted candidate updates data/model_torch/model_best.pt
-# on disk, but this running process keeps whatever model it already
-# loaded until restarted. Known follow-up, out of scope here.
+# progress. On promotion, hot-reloads _shared_model AND the live
+# me_player (module-level global, see start()) from the checkpoint
+# run_cycle just wrote to disk -- both a human game in progress and
+# future selfplay/train pick up the promoted weights without
+# restarting the process. Uses reload_models() rather than swapping in
+# run_cycle's own returned candidate object, so this is the exact same
+# code path the explicit `reload` UCI command uses.
 _train_thread = None
 _train_lock = threading.Lock()
 
@@ -106,6 +164,8 @@ def _train_worker():
 
         result_model = run_cycle(model, device, on_progress=on_progress)
         promoted = result_model is not model
+        if promoted:
+            reload_models(_shared_model, me_player.model if me_player else None)
         print(f"trainresult {'promoted' if promoted else 'not-promoted'}")
         sys.stdout.flush()
     except Exception as e:
@@ -117,8 +177,9 @@ def _train_worker():
 
 
 def start():
-    global _selfplay_thread, _train_thread
-    me_player = None
+    # me_player is module-level (not a plain local) so _train_worker's
+    # background thread can hot-reload it on promotion -- see reload_models().
+    global _selfplay_thread, _train_thread, me_player
     env = ChessEnv().reset()
 
     while True:
@@ -194,15 +255,21 @@ def start():
                     if running:
                         print("trainerror already running")
                         sys.stdout.flush()
+                    elif machine_busy():
+                        print("trainerror machine busy, try again later")
+                        sys.stdout.flush()
                     else:
-                        load1 = os.getloadavg()[0]
-                        cores = os.cpu_count() or 1
-                        if load1 > cores * 1.5:
-                            print("trainerror machine busy, try again later")
-                            sys.stdout.flush()
-                        else:
-                            _train_thread = threading.Thread(target=_train_worker, daemon=True)
-                            _train_thread.start()
+                        _train_thread = threading.Thread(target=_train_worker, daemon=True)
+                        _train_thread.start()
+        elif words[0] == "reload":
+            # Hot-reload the live player (and shared selfplay/train model)
+            # from data/model_torch/model_best.pt if a promoted checkpoint
+            # exists, without restarting the process.
+            if not me_player:
+                me_player = get_player()
+            found = reload_models(get_shared_model(), me_player.model)
+            print(f"reloadresult {'ok' if found else 'nothing-to-reload'}")
+            sys.stdout.flush()
         elif words[0] == "stop":
             pass
         elif words[0] == "quit":
