@@ -346,7 +346,24 @@ def _dispatch(words, env):
     elif words[0] == "selfplay":
         sub = words[1].strip() if len(words) > 1 else ""
         if sub == "start":
-            if _selfplay_thread is None or not _selfplay_thread.is_alive():
+            # Real, CONFIRMED race from today's 4-agent audit (Python
+            # Logic Auditor, reproduced live): selfplay and train both
+            # use get_shared_model() -- the SAME model object -- but
+            # neither used to check the other's running state, unlike
+            # _background_train_loop, which already guards against
+            # _selfplay_thread. A promotion's reload_models() does an
+            # in-place load_state_dict() on that shared model while
+            # selfplay could still be mid-forward-pass on it: a real,
+            # unsynchronized read/write race on live weights, not just
+            # a UX inconsistency. Refusing here (mirroring train
+            # start's own already-established trainerror pattern) is
+            # cheaper and safer than trying to make concurrent
+            # self-play/training on one shared model actually correct.
+            if _train_thread is not None and _train_thread.is_alive():
+                print("info error [selfplay] training already running")
+                print("selfplayresult *")
+                sys.stdout.flush()
+            elif _selfplay_thread is None or not _selfplay_thread.is_alive():
                 _selfplay_stop_event.clear()
                 model = get_shared_model()
                 _selfplay_thread = threading.Thread(
@@ -362,6 +379,12 @@ def _dispatch(words, env):
                 running = _train_thread is not None and _train_thread.is_alive()
                 if running:
                     print("trainerror already running")
+                    sys.stdout.flush()
+                elif _selfplay_thread is not None and _selfplay_thread.is_alive():
+                    # Symmetric side of the same fix -- see the
+                    # "selfplay start" branch's comment above for the
+                    # real race this closes.
+                    print("trainerror selfplay running")
                     sys.stdout.flush()
                 elif machine_busy():
                     print("trainerror machine busy, try again later")
