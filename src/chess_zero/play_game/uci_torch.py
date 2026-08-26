@@ -605,6 +605,20 @@ def _dispatch(words, env):
         if " " in rest:
             fen_before, uci_move = rest.rsplit(" ", 1)
             _record_human_move(fen_before, uci_move)
+    elif words[0] == "humanundo":
+        # BH-06 fix (real bug from an external audit, independently
+        # verified): humanmove was append-only, so a retracted move
+        # (frontend's Undo button) stayed permanently recorded here --
+        # a saved human game could carry a one-hot target for a move
+        # the player explicitly took back, alongside whatever they
+        # actually played instead from the same position. The frontend
+        # sends exactly one humanundo per Undo click (its own undo()
+        # only ever retracts one human ply at a time), so popping the
+        # single most recent entry matches 1:1.
+        if _human_game_moves:
+            _human_game_moves.pop()
+        print("humanundoresult ok")
+        sys.stdout.flush()
     elif words[0] == "humangameover":
         result = words[1].strip() if len(words) > 1 else ""
         _save_human_game(result)

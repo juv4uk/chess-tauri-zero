@@ -26,6 +26,8 @@ import sys
 import time
 import unittest
 
+from chess_zero.agent.player_chess_torch import LABELS
+
 
 class UciEngineProcess:
     """Spawns a real uci_torch.py process and gives tests a simple
@@ -281,6 +283,34 @@ class TestHumanGameRecording(UciTorchTestCase):
             self.assertEqual(z, 1.0)  # human-win -> +1.0
         finally:
             os.remove(path)  # don't leave test data in the real directory
+
+    def test_humanundo_removes_the_retracted_move_not_the_replacement(self):
+        # Regression test for BH-06, a real bug found by an external
+        # audit and independently verified: humanmove was append-only,
+        # so a retracted move (Undo) stayed permanently recorded --
+        # sequence: play e2e4, undo, play d2d4 instead, resign should
+        # save ONLY d2d4, never e2e4.
+        fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        self.engine.send(f"humanmove {fen} e2e4")
+        self.engine.send("humanundo")
+        self.engine.expect(lambda l: l == "humanundoresult ok")
+        self.engine.send(f"humanmove {fen} d2d4")
+        self.engine.send("humangameover human-win")
+        self.engine.expect(lambda l: l.startswith("humangameoverresult"))
+
+        after = set(os.listdir(self.HUMAN_DATA_DIR)) if os.path.isdir(self.HUMAN_DATA_DIR) else set()
+        new_files = after - self._existing
+        self.assertEqual(len(new_files), 1)
+        path = os.path.join(self.HUMAN_DATA_DIR, new_files.pop())
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            self.assertEqual(len(data), 1, "the retracted move must not also be recorded")
+            _, policy, _ = data[0]
+            self.assertGreater(policy[LABELS.index("d2d4")], 0, "the move actually played (d2d4) must be recorded")
+            self.assertEqual(policy[LABELS.index("e2e4")], 0, "the retracted move (e2e4) must not be recorded")
+        finally:
+            os.remove(path)
 
 
 if __name__ == "__main__":

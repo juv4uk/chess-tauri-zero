@@ -393,7 +393,7 @@ async function resign() {
   await sendHumanGameOver();
 }
 
-function undo() {
+async function undo() {
   if (mode !== "idle" || moveHistory.length < 2) return;
   game.undo();
   game.undo();
@@ -404,6 +404,19 @@ function undo() {
   heatmap = {};
   render();
   setStatus("Твій хід");
+  // BH-06 fix (real bug from an external audit, independently
+  // verified): the retracted human move used to stay recorded in
+  // _human_game_moves on the Python side (humanmove is append-only,
+  // undo() never told it anything) -- a saved human game could
+  // contain a one-hot policy target for a move the player explicitly
+  // took back, alongside whatever they actually played instead from
+  // the same position. Best-effort: losing this one pop shouldn't
+  // block the player from continuing their actual game.
+  try {
+    await reliableSend("humanundo");
+  } catch (err) {
+    console.error("Не вдалося скасувати запис людського ходу:", err);
+  }
 }
 
 async function toggleSelfplay() {
