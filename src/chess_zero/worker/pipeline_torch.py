@@ -30,7 +30,14 @@ PLAY_DATA_DIR = "../data/play_data_torch"
 
 
 def run_cycle(best_model, device, games_per_cycle=2, sims_per_move=30, max_halfmoves=16,
-              train_epochs_n=1, eval_games=2, cycle_idx=0):
+              train_epochs_n=1, eval_games=2, cycle_idx=0, on_progress=None):
+    """on_progress: optional callable(stage: str) -- called at the start
+    of each phase ("selfplay"/"train"/"evaluate") so a caller (e.g. the
+    UCI sidecar's `train start` command) can stream progress over a
+    line-based protocol instead of only seeing this function's own
+    print() output."""
+    if on_progress:
+        on_progress("selfplay")
     print(f"\n=== Cycle {cycle_idx}: self-play ({games_per_cycle} games) ===")
     pc = PlayConfig()
     pc.simulation_num_per_move = sims_per_move
@@ -39,6 +46,8 @@ def run_cycle(best_model, device, games_per_cycle=2, sims_per_move=30, max_halfm
     self_play_loop(best_model, pc, num_games=games_per_cycle, max_halfmoves=max_halfmoves, data_dir=PLAY_DATA_DIR)
     print(f"self-play done in {time.time()-t0:.1f}s")
 
+    if on_progress:
+        on_progress("train")
     print(f"=== Cycle {cycle_idx}: train candidate ({train_epochs_n} epoch(s)) ===")
     candidate_model = copy.deepcopy(best_model)
     optimizer = make_optimizer(candidate_model)
@@ -46,6 +55,8 @@ def run_cycle(best_model, device, games_per_cycle=2, sims_per_move=30, max_halfm
     history = train_epochs(candidate_model, optimizer, PLAY_DATA_DIR, epochs=train_epochs_n, batch_size=16)
     print(f"training done in {time.time()-t0:.1f}s, loss history={history}")
 
+    if on_progress:
+        on_progress("evaluate")
     print(f"=== Cycle {cycle_idx}: evaluate candidate vs best ({eval_games} games) ===")
     t0 = time.time()
     win_rate, promote = evaluate_candidate(candidate_model, best_model, game_num=eval_games, max_halfmoves=max_halfmoves)
