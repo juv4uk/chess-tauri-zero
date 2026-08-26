@@ -35,3 +35,4 @@ logs/
 # Real launcher scripts, not the old Keras project's GUI wrapper --
 # exception to the blanket *.sh rule above.
 !/release/*.sh
+!/start.sh
