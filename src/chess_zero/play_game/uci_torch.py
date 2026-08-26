@@ -15,6 +15,7 @@ wrapper that runs `python3 uci_torch.py`):
 import os
 import sys
 import threading
+import time
 
 sys.path.insert(0, ".")
 from chess_zero.agent.load_weights import load_torch_model
@@ -131,6 +132,7 @@ def _selfplay_worker(model, stop_event):
                 break
             player = white if env.white_to_move else black
             action = player.action(env)
+            print(f"info mctsroot {json.dumps(player.root_stats(env))}")
             env.step(action)
             print(f"selfplaymove {action}")
             sys.stdout.flush()
@@ -154,28 +156,89 @@ _train_thread = None
 _train_lock = threading.Lock()
 
 
-def _train_worker():
+def _train_worker(background=False):
+    """background=True is used by _background_train_loop() (no UCI
+    `train start` command was sent) -- prints info-prefixed
+    bgtrainprogress/bgtrainresult/bgtrainerror lines instead of the
+    plain trainprogress/trainresult/trainerror lines a manually
+    triggered run uses, so a client watching stdout can tell the two
+    apart, but everything else (the run_cycle call, the hot-reload on
+    promotion, _train_lock/_train_thread bookkeeping) is identical --
+    both paths share this one worker rather than duplicating it."""
     global _train_thread
+    progress_word = "bgtrainprogress" if background else "trainprogress"
+    result_line = "info bgtrainresult" if background else "trainresult"
+    error_line = "info bgtrainerror" if background else "trainerror"
     try:
         model = get_shared_model()
         device = next(model.parameters()).device
 
         def on_progress(stage):
-            print(f"info trainprogress {stage}")
+            print(f"info {progress_word} {stage}")
             sys.stdout.flush()
 
         result_model = run_cycle(model, device, on_progress=on_progress)
         promoted = result_model is not model
         if promoted:
             reload_models(_shared_model, me_player.model if me_player else None)
-        print(f"trainresult {'promoted' if promoted else 'not-promoted'}")
+        print(f"{result_line} {'promoted' if promoted else 'not-promoted'}")
         sys.stdout.flush()
     except Exception as e:
-        print(f"trainerror {e}")
+        print(f"{error_line} {e}")
         sys.stdout.flush()
     finally:
         with _train_lock:
             _train_thread = None
+
+
+# --- background self-training: when the machine is idle AND no human
+# game appears to be in progress AND nothing else (selfplay/manual
+# train) is already running, automatically run one unattended
+# run_cycle every so often. The engine has no direct signal from the
+# frontend for "a human is mid-game" (the frontend tracks its own
+# `mode` state client-side; nothing communicates that to the engine
+# process) -- the proxy used here is elapsed time since the last
+# `go`/`position` command. BG_IDLE_THRESHOLD_SEC=300 (5 min) is a
+# judgment call: MCTS moves in this app resolve in single-digit
+# seconds even at the "hard" difficulty (confirmed earlier this
+# session: 200 sims ~9.6s/move), so 5 minutes of silence is already
+# many multiples of a real thinking pause; shorter would risk firing
+# while a human is still mid-game between moves, longer would just
+# mean background training runs less often than it safely could.
+BG_CHECK_INTERVAL_SEC = 120
+BG_IDLE_THRESHOLD_SEC = 300
+
+_last_human_activity_lock = threading.Lock()
+_last_human_activity = None  # None = no go/position seen yet this process -> treated as idle
+
+
+def _mark_human_activity():
+    global _last_human_activity
+    with _last_human_activity_lock:
+        _last_human_activity = time.time()
+
+
+def _human_possibly_active():
+    with _last_human_activity_lock:
+        last = _last_human_activity
+    return last is not None and (time.time() - last) < BG_IDLE_THRESHOLD_SEC
+
+
+def _background_train_loop():
+    global _train_thread
+    while True:
+        time.sleep(BG_CHECK_INTERVAL_SEC)
+        if _human_possibly_active():
+            continue
+        if _selfplay_thread is not None and _selfplay_thread.is_alive():
+            continue
+        if machine_busy():
+            continue
+        with _train_lock:
+            if _train_thread is not None and _train_thread.is_alive():
+                continue
+            _train_thread = threading.Thread(target=_train_worker, kwargs={"background": True}, daemon=True)
+            _train_thread.start()
 
 
 def start():
@@ -183,6 +246,7 @@ def start():
     # background thread can hot-reload it on promotion -- see reload_models().
     global _selfplay_thread, _train_thread, me_player
     env = ChessEnv().reset()
+    threading.Thread(target=_background_train_loop, daemon=True).start()
 
     while True:
         line = input()
@@ -198,6 +262,7 @@ def start():
         elif words[0] == "ucinewgame":
             env.reset()
         elif words[0] == "position":
+            _mark_human_activity()
             words = words[1].split(" ", 1)
             if words[0] == "startpos":
                 env.reset()
@@ -215,9 +280,11 @@ def start():
                     for w in words[1].split(" "):
                         env.step(w, False)
         elif words[0] == "go":
+            _mark_human_activity()
             if not me_player:
                 me_player = get_player()
             action = me_player.action(env, False)
+            print(f"info mctsroot {json.dumps(me_player.root_stats(env))}")
             print(f"bestmove {action}")
             sys.stdout.flush()
         elif words[0] == "setoption":

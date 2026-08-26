@@ -120,6 +120,32 @@ class TorchChessPlayer:
         self.moves.append([env.observation, list(policy)])
         return self.labels[my_action]
 
+    def root_stats(self, env: ChessEnv):
+        """Root-level MCTS stats for the position env is currently at,
+        right after action() has just searched it -- action() calls
+        reset() at the START, not the end, so self.tree still holds
+        that search's root node when this is called right after
+        action() returns. One entry per legal move the search actually
+        selected via PUCT at least once; a move with zero visits never
+        gets a self.tree[state].a entry at all. Root-only (this
+        position's own children), not the full recursive tree -- see
+        docs/development-plan-uk.md's "Теплокарта наступного ходу".
+        self.tree is itself a defaultdict, so checking `state not in
+        self.tree` first (not `self.tree[state]`) avoids creating a
+        spurious empty entry as a side effect of a failed lookup."""
+        state = state_key(env)
+        if state not in self.tree:
+            return []
+        visit_stats = self.tree[state]
+        # a_s.q/.p come from numpy (leaf_p is a model-output ndarray),
+        # so they're numpy.float32 -- confirmed by a real
+        # "float32 is not JSON serializable" crash before this cast
+        # was added. n is a plain int (virtual_loss arithmetic only).
+        return [
+            {"move": action.uci(), "n": int(a_s.n), "q": round(float(a_s.q), 4), "p": round(float(a_s.p), 4)}
+            for action, a_s in visit_stats.a.items()
+        ]
+
     def search_moves(self, env: ChessEnv):
         futures = []
         with ThreadPoolExecutor(max_workers=self.play_config.search_threads) as executor:

@@ -38,6 +38,24 @@ let resigned = false;
 let mode = "idle"; // "idle" | "thinking" | "selfplay" | "train"
 let selfplayStopRequested = false;
 
+// P0 "теплокарта наступного ходу" (root-only): destination square ->
+// visit count from the most recent "info mctsroot <json>" line, i.e.
+// what the engine considered right before the move it just made.
+// Only ever read while `selected` is null (see render()) so it never
+// fights the .legal highlight, which is the functionally important one.
+let heatmap = {};
+
+function applyMctsInfo(line) {
+  if (!line.startsWith("info mctsroot ")) return;
+  const entries = JSON.parse(line.slice("info mctsroot ".length));
+  const next = {};
+  for (const e of entries) {
+    const to = e.move.slice(2, 4); // destination square, same convention as uciToMoveInput()
+    next[to] = Math.max(next[to] || 0, e.n); // a square can be the target of more than one root move (e.g. underpromotions)
+  }
+  heatmap = next;
+}
+
 function setStatus(text) {
   statusEl.textContent = text;
 }
@@ -69,6 +87,11 @@ function render() {
       if (piece) el.textContent = PIECE_GLYPH[piece.color + piece.type];
       if (square === selected) el.classList.add("selected");
       if (legalTargets.includes(square)) el.classList.add("legal");
+      if (!selected && heatmap[square]) {
+        const maxN = Math.max(1, ...Object.values(heatmap));
+        const intensity = heatmap[square] / maxN;
+        el.style.boxShadow = `inset 0 0 0 ${Math.round(4 + 26 * intensity)}px rgba(230, 126, 34, ${(0.12 + 0.35 * intensity).toFixed(2)})`;
+      }
 
       el.addEventListener("click", () => onSquareClick(square));
       boardEl.appendChild(el);
@@ -94,6 +117,7 @@ async function onSquareClick(square) {
       const move = game.move({ from: selected, to: square, promotion: "q" });
       moveHistory.push(move.lan ?? `${selected}${square}`);
       selected = null;
+      heatmap = {}; // the previous heatmap described the position before this human move
       render();
       await requestEngineMove();
       return;
@@ -123,7 +147,7 @@ async function requestEngineMove() {
   setStatus("Рушій думає...");
   await reliableSend(`position startpos moves ${moveHistory.join(" ")}`);
   await reliableSend("go");
-  const bestmoveLine = await waitForLine((l) => l.startsWith("bestmove "));
+  const bestmoveLine = await pollUntil((l) => l.startsWith("bestmove "), applyMctsInfo);
   const uci = bestmoveLine.split(" ")[1];
   const move = game.move(uciToMoveInput(uci));
   moveHistory.push(move.lan ?? uci);
@@ -232,6 +256,7 @@ async function newGame() {
   moveHistory.length = 0;
   selected = null;
   resigned = false;
+  heatmap = {};
   render();
   await reliableSend("ucinewgame");
   await applyDifficulty();
@@ -259,6 +284,7 @@ function undo() {
   moveHistory.pop();
   resigned = false;
   selected = null;
+  heatmap = {};
   render();
   setStatus("Твій хід");
 }
@@ -278,6 +304,7 @@ async function toggleSelfplay() {
   game.reset();
   moveHistory.length = 0;
   resigned = false;
+  heatmap = {};
   render();
   setStatus("Самогра...");
 
@@ -286,6 +313,7 @@ async function toggleSelfplay() {
     await pollUntil(
       (line) => line.startsWith("selfplayresult "),
       (line) => {
+        applyMctsInfo(line);
         if (line.startsWith("selfplaymove ")) {
           const uci = line.slice("selfplaymove ".length).trim();
           const move = game.move(uciToMoveInput(uci));
