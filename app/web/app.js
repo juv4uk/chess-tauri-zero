@@ -192,6 +192,7 @@ async function requestEngineMove() {
   render();
   setStatus(isOver() ? gameOverMessage() : "Твій хід");
   if (isOver()) await sendHumanGameOver(); // the engine's own move just ended the game
+}
 
 function gameOverMessage() {
   if (resigned) return "Ти здався.";
