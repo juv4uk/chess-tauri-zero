@@ -12,6 +12,7 @@ const DIFFICULTY = { easy: 10, medium: 50, hard: 200 };
 
 const boardEl = document.getElementById("board");
 const statusEl = document.getElementById("status");
+const bgJobsEl = document.getElementById("bg-jobs");
 const trainLogEl = document.getElementById("train-log");
 const colorButtons = document.querySelectorAll("[data-color]");
 const difficultyButtons = document.querySelectorAll("[data-difficulty]");
@@ -47,6 +48,22 @@ let selfplayStopRequested = false;
 // started with and self-cancels the moment it changes, instead of
 // racing the new session.
 let engineEpoch = 0;
+
+// Small status area, separate from the main #status line, for work
+// that keeps running after the user has regained control of the GUI
+// (Escape during training "detaches" instead of killing -- see
+// detachFromTraining()). Keyed by job name so more than one could show
+// at once in principle, though only "train" uses this today.
+let backgroundJobs = {};
+
+function setBackgroundJob(key, text) {
+  if (text === null) {
+    delete backgroundJobs[key];
+  } else {
+    backgroundJobs[key] = text;
+  }
+  bgJobsEl.textContent = Object.values(backgroundJobs).join(" | ");
+}
 
 // P0 "теплокарта наступного ходу" (root-only): destination square ->
 // visit count from the most recent "info mctsroot <json>" line, i.e.
@@ -266,9 +283,10 @@ function updateControlsEnabled() {
   undoBtn.disabled = busy || moveHistory.length < 2;
   selfplayBtn.disabled = mode === "thinking" || mode === "train";
   selfplayBtn.textContent = mode === "selfplay" ? "Зупинити самогру" : "Дивитись самогру";
-  // No "stop training" affordance in this scope (train runs one bounded
-  // cycle to completion) -- disabled for the whole busy window, not just
-  // while some OTHER mode is active.
+  // Escape detaches training rather than stopping it (see
+  // detachFromTraining()) -- mode returns to idle quickly either way,
+  // so this button is only disabled for the brief window training is
+  // still the FOREGROUND action, not for however long it actually runs.
   trainBtn.disabled = busy;
   reloadBtn.disabled = busy;
   historyBtn.disabled = busy;
@@ -380,12 +398,20 @@ async function toggleSelfplay() {
   }
 }
 
+// Set true by detachFromTraining() (Escape during "train") -- tells
+// this same in-flight call's own result-handling below where to report
+// (the small #bg-jobs area instead of the main #status line) once the
+// training it's still genuinely waiting on actually finishes.
+let trainDetached = false;
+
 async function startTraining() {
   if (mode !== "idle") return;
   mode = "train";
+  trainDetached = false;
   updateControlsEnabled();
   trainLogEl.textContent = "";
   setStatus("Тренування...");
+  setBackgroundJob("train", "Тренування...");
 
   await reliableSend("train start");
   try {
@@ -394,21 +420,56 @@ async function startTraining() {
         line.startsWith("trainresult ") || line.startsWith("trainerror "),
       (line) => {
         if (line.startsWith("info trainprogress ")) {
-          trainLogEl.textContent += line.slice("info trainprogress ".length).trim() + "\n";
+          const stage = line.slice("info trainprogress ".length).trim();
+          trainLogEl.textContent += stage + "\n";
+          setBackgroundJob("train", `Тренування: ${stage}`);
         }
-      }
+      },
+      3600000 // 1h -- long enough for a real cycle to finish even detached, not just the usual 10min
     );
-    if (resultLine.startsWith("trainerror ")) {
-      setStatus(`Тренування: ${resultLine.slice("trainerror ".length)}`);
+    const resultText = resultLine.startsWith("trainerror ")
+      ? `Тренування: ${resultLine.slice("trainerror ".length)}`
+      : `Тренування завершено: ${resultLine.slice("trainresult ".length)}`;
+    if (trainDetached) {
+      setBackgroundJob("train", resultText);
+      setTimeout(() => setBackgroundJob("train", null), 10000);
     } else {
-      setStatus(`Тренування завершено: ${resultLine.slice("trainresult ".length)}`);
+      setStatus(resultText);
     }
   } catch (err) {
-    setStatus(`Помилка тренування: ${err}`);
+    const errText = `Помилка тренування: ${err}`;
+    if (trainDetached) {
+      setBackgroundJob("train", errText);
+      setTimeout(() => setBackgroundJob("train", null), 10000);
+    } else {
+      setStatus(errText);
+    }
   } finally {
-    mode = "idle";
-    updateControlsEnabled();
+    if (!trainDetached) {
+      mode = "idle";
+      updateControlsEnabled();
+    }
   }
+}
+
+// Escape during training: unlike thinking/selfplay (which have no
+// cooperative stop point in the Python code and so genuinely need a
+// hard kill), a training cycle already records its own result to the
+// generation journal regardless of how it ends -- there's nothing to
+// lose by just letting it keep running. This "detaches" the GUI
+// instead: releases `mode` back to idle right away (the engine process
+// is untouched, still training), while the SAME pollUntil call already
+// awaited inside startTraining() keeps genuinely waiting for the real
+// trainresult/trainerror -- trainDetached tells it to report into
+// #bg-jobs instead of #status when that finally arrives.
+function detachFromTraining() {
+  trainDetached = true;
+  mode = "idle";
+  setStatus("Тренування продовжується у фоні. GUI розблоковано.");
+  setBackgroundJob("train", "Тренування триває у фоні...");
+  selected = null;
+  render();
+  updateControlsEnabled();
 }
 
 // A promoted `train start` writes a new checkpoint to disk, but the
@@ -517,18 +578,23 @@ async function forceStopEngine() {
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  // All three busy modes now force-stop uniformly. selfplay used to
-  // just resend "selfplay stop" (same as the button) -- real bug found
-  // in today's 4-agent audit: that's a polite, ASYNC request the
-  // engine may never see in time if it's genuinely stuck (not just
-  // between moves), so Escape gave false confidence of an immediate
-  // stop while the actual 600s pollUntil wait kept running unchanged.
-  // Escape is meant to be a hard "stop the process" panic key (per the
-  // owner's own request), not a second, identical polite ask -- the
-  // dedicated "Зупинити самогру" BUTTON still uses the graceful
-  // toggleSelfplay() path for a deliberate, non-emergency stop.
-  if (mode === "thinking" || mode === "train" || mode === "selfplay") {
+  // thinking/selfplay have no cooperative stop point in the Python
+  // code at all, so Escape hard-kills+respawns the engine for those
+  // (see forceStopEngine()'s own comment -- also closes a real bug
+  // where selfplay's old Escape path just resent "selfplay stop" and
+  // gave false confidence of an immediate stop while the actual wait
+  // kept running unchanged underneath).
+  //
+  // train is different, by the owner's own explicit request: a
+  // training cycle already records its own result to the generation
+  // journal no matter how it ends, so there's nothing to lose by
+  // letting it keep running -- Escape here just releases the GUI
+  // (detachFromTraining()) instead of killing the process, and
+  // #bg-jobs shows it's still going.
+  if (mode === "thinking" || mode === "selfplay") {
     forceStopEngine();
+  } else if (mode === "train") {
+    detachFromTraining();
   }
 });
 

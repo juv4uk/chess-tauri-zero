@@ -74,6 +74,17 @@ _shared_model_lock = threading.Lock()
 # its .model in place. None until the first `isready`/`go`/`setoption`.
 me_player = None
 
+# Guards me_player.model specifically: a human `go` reads it (forward
+# pass inside action()) while a training promotion's hot-reload writes
+# it in place (load_state_dict()) from a DIFFERENT thread. Before the
+# "let training keep running detached in the background" feature, this
+# was only latently possible (the GUI blocked all other actions while
+# training ran); that feature makes a human move genuinely concurrent
+# with a real promotion a real, reachable scenario, not just a
+# theoretical one -- so the two now share this lock instead of racing
+# on live tensor data mid-copy.
+_me_player_lock = threading.Lock()
+
 
 def get_shared_model():
     global _shared_model
@@ -193,7 +204,8 @@ def _train_worker(background=False):
         result_model = run_cycle(model, device, on_progress=on_progress)
         promoted = result_model is not model
         if promoted:
-            reload_models(_shared_model, me_player.model if me_player else None)
+            with _me_player_lock:
+                reload_models(_shared_model, me_player.model if me_player else None)
         print(f"{result_line} {'promoted' if promoted else 'not-promoted'}")
         sys.stdout.flush()
     except Exception as e:
@@ -340,8 +352,10 @@ def _dispatch(words, env):
         _mark_human_activity()
         if not me_player:
             me_player = get_player()
-        action = me_player.action(env, False)
-        print(f"info mctsroot {json.dumps(me_player.root_stats(env))}")
+        with _me_player_lock:
+            action = me_player.action(env, False)
+            mcts_stats = me_player.root_stats(env)
+        print(f"info mctsroot {json.dumps(mcts_stats)}")
         print(f"bestmove {action}")
         sys.stdout.flush()
     elif words[0] == "setoption":
@@ -423,7 +437,8 @@ def _dispatch(words, env):
         # exists, without restarting the process.
         if not me_player:
             me_player = get_player()
-        found = reload_models(get_shared_model(), me_player.model)
+        with _me_player_lock:
+            found = reload_models(get_shared_model(), me_player.model)
         print(f"reloadresult {'ok' if found else 'nothing-to-reload'}")
         sys.stdout.flush()
     elif words[0] == "stop":
