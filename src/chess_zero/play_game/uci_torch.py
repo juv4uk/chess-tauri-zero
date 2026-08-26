@@ -12,16 +12,19 @@ wrapper that runs `python3 uci_torch.py`):
 
     echo -e "uci\nisready\nposition startpos\ngo\nquit" | python3 uci_torch.py
 """
+import chess
 import os
 import sys
 import threading
 import time
+from datetime import datetime
 
 sys.path.insert(0, ".")
 from chess_zero.agent.load_weights import load_torch_model
 from chess_zero.agent.player_chess_torch import TorchChessPlayer, PlayConfig
 from chess_zero.agent.batched_predictor import BatchedPredictor
 from chess_zero.env.chess_env import ChessEnv
+from chess_zero.lib.data_helper_torch import write_game_data_to_file
 import json
 
 from chess_zero.worker.pipeline_torch import run_cycle, model_history
@@ -84,6 +87,72 @@ me_player = None
 # theoretical one -- so the two now share this lock instead of racing
 # on live tensor data mid-copy.
 _me_player_lock = threading.Lock()
+
+
+# --- human game recording: docs/development-plan-uk.md P1 item 7,
+# "перший, дешевий крок" -- a human's own move has no MCTS-derived
+# policy distribution (the human just plays it, no search happens), so
+# it's recorded as a one-hot policy (1.0 on the move actually played,
+# 0 everywhere else) -- the standard way to represent a move without a
+# real search distribution in this same (fen, policy, value) training
+# format optimize_torch.py's data pipeline already reads unchanged.
+# Written to its OWN directory (never data/play_data_torch/, which is
+# self-play only) -- the directory itself IS the "source: human" tag
+# the plan asked for; no per-record field was added since the shared
+# JSON shape (a flat [fen, policy, value] list) has no field for one
+# without changing what optimize_torch.py/self-play both already read.
+HUMAN_PLAY_DATA_DIR = "../data/play_data_human"
+_human_game_moves = []  # [[fen_before_move, one_hot_policy], ...] for the CURRENT game in progress
+
+
+def _one_hot_policy(uci_move):
+    """labels_n-length policy with a single 1.0 at the played move's
+    index, 0 elsewhere -- reuses me_player's own label encoding
+    (identical across every TorchChessPlayer instance, same LABELS
+    table) so this stays consistent with whatever policy vectors
+    self-play/training already produce, with no separate table to
+    keep in sync."""
+    policy = [0.0] * me_player.labels_n
+    idx = me_player.move_lookup.get(chess.Move.from_uci(uci_move))
+    if idx is not None:
+        policy[idx] = 1.0
+    return policy
+
+
+def _record_human_move(fen_before, uci_move):
+    """fen_before comes from the FRONTEND (its own chess.js `game`
+    object), not from this process's own `env` -- a real bug caught by
+    testing this end-to-end rather than trusting it from reading the
+    code: `go` computes the engine's OWN reply move but never applies
+    it to `env` (only an explicit `position ... moves ...` command
+    does, and that only arrives later, as part of the NEXT human
+    move's own round-trip) -- so by the time a second/later humanmove
+    arrives, this process's `env` is stale by exactly one ply (missing
+    the engine's most recent reply). The frontend's chess.js state has
+    no such lag, since it applies every move (its own and the
+    engine's) the instant it happens."""
+    _human_game_moves.append([fen_before, _one_hot_policy(uci_move)])
+
+
+def _save_human_game(result):
+    """result: "human-win" | "human-loss" | "draw" (or anything else,
+    treated as an unknown/drawn outcome -- see uci_torch.py's own
+    `humangameover` handler for exactly what the frontend sends and
+    when). Every recorded position in this one game gets the SAME z,
+    from the human's own perspective throughout -- unlike self-play's
+    white/black split, there's only one side here that matters."""
+    global _human_game_moves
+    if not _human_game_moves:
+        return
+    z = {"human-win": 1.0, "human-loss": -1.0}.get(result, 0.0)
+    data = [[fen, policy, z] for fen, policy in _human_game_moves]
+    os.makedirs(HUMAN_PLAY_DATA_DIR, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    path = os.path.join(HUMAN_PLAY_DATA_DIR, f"human_{ts}.json")
+    write_game_data_to_file(path, data)
+    print(f"humangameoverresult saved {len(data)} moves to {path}")
+    sys.stdout.flush()
+    _human_game_moves = []
 
 
 def get_shared_model():
@@ -330,6 +399,7 @@ def _dispatch(words, env):
         print("readyok")
     elif words[0] == "ucinewgame":
         env.reset()
+        _human_game_moves.clear()  # abandon any unfinished game's recording rather than bleed into the next one
     elif words[0] == "position":
         _mark_human_activity()
         words = words[1].split(" ", 1)
@@ -424,6 +494,21 @@ def _dispatch(words, env):
                 else:
                     _train_thread = threading.Thread(target=_train_worker, daemon=True)
                     _train_thread.start()
+    elif words[0] == "humanmove":
+        # "humanmove <fen-before-move, 6 space-separated fields> <uci
+        # move>" -- fen comes from the frontend's own chess.js state,
+        # not this process's `env` (see _record_human_move's docstring
+        # for the real staleness bug that forced this design). Split on
+        # the LAST space only, since the FEN itself is multi-token.
+        rest = words[1] if len(words) > 1 else ""
+        if not me_player:
+            me_player = get_player()
+        if " " in rest:
+            fen_before, uci_move = rest.rsplit(" ", 1)
+            _record_human_move(fen_before, uci_move)
+    elif words[0] == "humangameover":
+        result = words[1].strip() if len(words) > 1 else ""
+        _save_human_game(result)
     elif words[0] == "history":
         # P0 "generation journal + quality curve": one line per
         # evaluated cycle (promoted or rejected), oldest first.

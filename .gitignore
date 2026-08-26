@@ -12,6 +12,7 @@ __pycache__
 /data/play_data/
 /data/model/next_generation/
 /data/play_data_torch/
+/data/play_data_human/
 /data/model_torch/
 .ipynb_checkpoints/
 tmp/

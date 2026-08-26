@@ -141,11 +141,19 @@ async function onSquareClick(square) {
     const legal = game.moves({ square: selected, verbose: true });
     const target = legal.find((m) => m.to === square);
     if (target) {
+      const fenBefore = game.fen();
       const move = game.move({ from: selected, to: square, promotion: "q" });
-      moveHistory.push(move.lan ?? `${selected}${square}`);
+      const uci = move.lan ?? `${selected}${square}`;
+      moveHistory.push(uci);
       selected = null;
       heatmap = {}; // the previous heatmap described the position before this human move
       render();
+      // Awaited (not fire-and-forget) so this always reaches the
+      // engine's stdin BEFORE requestEngineMove's own "position"/"go"
+      // -- both go through the same single-threaded reliableSend, so
+      // an un-awaited call here could interleave after a reconnect
+      // retry and arrive out of order.
+      await recordHumanMove(fenBefore, uci);
       await requestEngineMove();
       return;
     }
@@ -167,6 +175,7 @@ async function onSquareClick(square) {
 async function requestEngineMove() {
   if (isOver()) {
     setStatus(gameOverMessage());
+    await sendHumanGameOver(); // the human's own move just ended the game
     return;
   }
   mode = "thinking";
@@ -181,13 +190,46 @@ async function requestEngineMove() {
   mode = "idle";
   render();
   setStatus(isOver() ? gameOverMessage() : "Твій хід");
-}
+  if (isOver()) await sendHumanGameOver(); // the engine's own move just ended the game
 
 function gameOverMessage() {
   if (resigned) return "Ти здався.";
   if (game.isCheckmate()) return `Мат! Переміг ${game.turn() === "w" ? "чорний" : "білий"}.`;
   if (game.isDraw()) return "Нічия.";
   return "Гру завершено.";
+}
+
+// P1 item 7 (docs/development-plan-uk.md): record games played against
+// a human as a separate training-data source (data/play_data_human/,
+// never mixed with self-play). fenBefore comes from THIS frontend's
+// own chess.js state, not asked of the backend -- its `env` lags by
+// one ply right after the engine's own reply (a real bug caught while
+// building this, see uci_torch.py's _record_human_move docstring).
+// Best-effort: a failed save shouldn't interrupt an actual game the
+// human is in the middle of playing.
+async function recordHumanMove(fenBefore, uci) {
+  try {
+    await reliableSend(`humanmove ${fenBefore} ${uci}`);
+  } catch (err) {
+    console.error("Не вдалося записати людський хід для тренувальних даних:", err);
+  }
+}
+
+async function sendHumanGameOver() {
+  let result;
+  if (resigned) {
+    result = "human-loss";
+  } else if (game.isCheckmate()) {
+    const winnerColor = game.turn() === "w" ? "b" : "w"; // side to move is the one checkmated -- the OTHER side won
+    result = winnerColor === humanColor ? "human-win" : "human-loss";
+  } else {
+    result = "draw"; // real draw, or a truncation/other end state -- safest default, never mislabeled as a win/loss
+  }
+  try {
+    await reliableSend(`humangameover ${result}`);
+  } catch (err) {
+    console.error("Не вдалося зберегти партію для тренувальних даних:", err);
+  }
 }
 
 async function engineSend(line) {
@@ -319,11 +361,12 @@ async function newGame() {
   }
 }
 
-function resign() {
+async function resign() {
   if (mode !== "idle" || isOver()) return;
   resigned = true;
   setStatus(gameOverMessage());
   updateControlsEnabled();
+  await sendHumanGameOver();
 }
 
 function undo() {
