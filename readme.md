@@ -121,7 +121,7 @@ hot-reload натренованої моделі — прямо з інтерф�
 
 ```bash
 ./start.sh          # Linux
-start.bat           # Windows (PowerShell/cmd)
+.\start.bat          # Windows PowerShell (у cmd.exe достатньо просто start.bat)
 ```
 
 **Ручне налаштування `.venv` більше не потрібне** — скрипт сам
