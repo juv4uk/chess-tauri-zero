@@ -1,6 +1,8 @@
 mod commands;
 
-use commands::engine::{engine_drain, engine_is_running, engine_send, engine_start, EngineState};
+use commands::engine::{
+    engine_drain, engine_is_running, engine_kill, engine_send, engine_start, EngineState,
+};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -12,7 +14,8 @@ pub fn run() {
             engine_start,
             engine_send,
             engine_drain,
-            engine_is_running
+            engine_is_running,
+            engine_kill
         ])
         .setup(|app| {
             // Version shown in the window title comes from tauri.conf.json's

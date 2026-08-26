@@ -99,6 +99,33 @@ pub fn engine_send(line: String, state: State<'_, EngineState>) -> Result<(), St
 }
 
 #[tauri::command]
+pub fn engine_kill(state: State<'_, EngineState>) -> Result<(), String> {
+    // engine_start is idempotent -- if the sidecar is ALIVE but just
+    // slow/stuck (mid-search, mid-training-cycle; neither has an
+    // interrupt point in the Python code), calling engine_start again
+    // does nothing (child_slot.is_some() short-circuits it). This is
+    // the actual "force stop": kills the live process outright so the
+    // next engine_start spawns a fresh one. Used by the frontend's
+    // Escape handler for the two modes (thinking/train) that have no
+    // graceful stop of their own, unlike selfplay's `selfplay stop`.
+    //
+    // Windows nuance, not fully solved here: the Windows sidecar
+    // (uci-engine-launcher.exe) spawns python.exe as a CHILD process
+    // rather than exec-replacing itself (no exec() on Windows) --
+    // killing the launcher does not directly kill that grandchild.
+    // In practice python.exe should still exit on its own once the
+    // stdin pipe this closes reaches EOF (caught by uci_torch.py's
+    // own `except EOFError: break`), but this is not an immediate,
+    // guaranteed kill the way it is on Linux (the sidecar there execs
+    // python directly, so the same PID IS python).
+    let mut child_slot = state.child.lock().map_err(|e| e.to_string())?;
+    if let Some(child) = child_slot.take() {
+        child.kill().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn engine_is_running(state: State<'_, EngineState>) -> Result<bool, String> {
     let child_slot = state.child.lock().map_err(|e| e.to_string())?;
     Ok(child_slot.is_some())

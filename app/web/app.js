@@ -440,6 +440,42 @@ function renderHistory(entries) {
   historyTableEl.innerHTML = `<tr><th>Цикл</th><th>Win-rate</th><th>Статус</th><th>Коли</th></tr>${rows}`;
 }
 
+// Escape: stop whatever is running. selfplay has a real graceful stop
+// (`selfplay stop`, already used by the button); "thinking" (waiting
+// on `go`) and "train" have no interrupt point in the Python code at
+// all, so the only real way to unstick them is to force-kill the
+// sidecar and respawn it -- see engine_kill's own doc comment on the
+// Rust side for why engine_start alone can't do this (it's idempotent,
+// a no-op while the process is alive, even if it's stuck).
+async function forceStopEngine() {
+  setStatus("Escape -- примусово зупиняю рушій...");
+  mode = "train"; // block controls during the kill+respawn round-trip
+  updateControlsEnabled();
+  try {
+    await invoke("engine_kill");
+    await invoke("engine_start");
+    await handshake();
+    await applyDifficulty();
+    setStatus("Рушій примусово перезапущено (Escape). Поточний хід/тренування перервано.");
+  } catch (err) {
+    setStatus(`Помилка примусової зупинки: ${err}`);
+  } finally {
+    mode = "idle";
+    selected = null;
+    heatmap = {};
+    render();
+  }
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (mode === "selfplay") {
+    toggleSelfplay(); // same path as clicking "Зупинити самогру"
+  } else if (mode === "thinking" || mode === "train") {
+    forceStopEngine();
+  }
+});
+
 colorButtons.forEach((b) =>
   b.addEventListener("click", () => {
     if (mode !== "idle") return;
