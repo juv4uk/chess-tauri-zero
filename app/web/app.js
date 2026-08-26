@@ -182,16 +182,27 @@ async function requestEngineMove() {
   mode = "thinking";
   updateControlsEnabled();
   setStatus("Рушій думає...");
-  await reliableSend(`position startpos moves ${moveHistory.join(" ")}`);
-  await reliableSend("go");
-  const bestmoveLine = await pollUntil((l) => l.startsWith("bestmove "), applyMctsInfo);
-  const uci = bestmoveLine.split(" ")[1];
-  const move = game.move(uciToMoveInput(uci));
-  moveHistory.push(move.lan ?? uci);
-  mode = "idle";
-  render();
-  setStatus(isOver() ? gameOverMessage() : "Твій хід");
-  if (isOver()) await sendHumanGameOver(); // the engine's own move just ended the game
+  // BH-03 fix (real bug from an external audit, independently
+  // verified): this whole body used to run with no try/catch/finally
+  // at all -- if reliableSend/pollUntil threw, mode stayed stuck at
+  // "thinking" forever with no automatic recovery (only Escape's
+  // force-stop could unstick it), and the rejection went uncaught.
+  try {
+    await reliableSend(`position startpos moves ${moveHistory.join(" ")}`);
+    await reliableSend("go");
+    const bestmoveLine = await pollUntil((l) => l.startsWith("bestmove "), applyMctsInfo);
+    const uci = bestmoveLine.split(" ")[1];
+    const move = game.move(uciToMoveInput(uci));
+    moveHistory.push(move.lan ?? uci);
+    render();
+    setStatus(isOver() ? gameOverMessage() : "Твій хід");
+    if (isOver()) await sendHumanGameOver(); // the engine's own move just ended the game
+  } catch (err) {
+    setStatus(`Помилка: ${err}`);
+  } finally {
+    mode = "idle";
+    updateControlsEnabled();
+  }
 }
 
 function gameOverMessage() {
@@ -353,14 +364,24 @@ async function newGame() {
   resigned = false;
   heatmap = {};
   render();
-  await reliableSend("ucinewgame");
-  await applyDifficulty();
-  if (humanColor === "b") {
-    await requestEngineMove(); // sets mode back to "idle" itself when done
-  } else {
+  // BH-03 fix (same class of bug as requestEngineMove -- see its own
+  // comment): the ucinewgame/applyDifficulty round-trip used to run
+  // with no try/catch/finally, so a failure here left mode stuck at
+  // "thinking" forever with an uncaught rejection.
+  try {
+    await reliableSend("ucinewgame");
+    await applyDifficulty();
+    if (humanColor === "b") {
+      await requestEngineMove(); // resets mode to "idle" itself via its own try/finally
+    } else {
+      setStatus("Твій хід");
+    }
+  } catch (err) {
+    setStatus(`Помилка нової партії: ${err}`);
+  } finally {
     mode = "idle";
     render();
-    setStatus("Твій хід");
+    updateControlsEnabled();
   }
 }
 
