@@ -5,4 +5,4 @@
 torch==2.13.0
 numpy==2.5.2
 h5py==3.16.0
-python-chess==1.11.2
+chess==1.11.2
