@@ -32,3 +32,6 @@ logs/
 # Tauri requires icon.png to exist (tauri::generate_context! fails
 # without it, confirmed) -- exception to the blanket *.png rule above.
 !/app/src-tauri/icons/*.png
+# Real launcher scripts, not the old Keras project's GUI wrapper --
+# exception to the blanket *.sh rule above.
+!/release/*.sh
