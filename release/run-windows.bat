@@ -11,5 +11,17 @@ rem window and no error message, because the frontend assets silently
 rem fail to resolve.
 setlocal
 set REPO_ROOT=%~dp0..
+
+where python >nul 2>nul
+if errorlevel 1 (
+    echo Python не знайдено на PATH. Встанови Python 3.10+ ^(python.org або winget install Python.Python.3^) і повтори.
+    exit /b 1
+)
+python "%REPO_ROOT%\scripts\bootstrap_venv.py"
+if errorlevel 1 (
+    echo Встановлення Python-залежностей не вдалося -- дивись помилку вище.
+    exit /b 1
+)
+
 cd /d "%REPO_ROOT%\app\src-tauri"
 "%REPO_ROOT%\release\chess-tauri-zero-current-windows-x86_64.exe"

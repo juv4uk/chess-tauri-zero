@@ -42,8 +42,16 @@ release\run-windows.bat
 на dev-машині відкрив вікно коректно).
 
 Обидва — portable-бінарники без Python усередині: клонуй репо,
-налаштуй `.venv` за `readme.md` (venv/`src/` мають лишатись поруч із
-репозиторієм — sidecar шукає їх відносно `app/src-tauri/binaries/`).
+`.venv`/`src/` мають лишатись поруч із репозиторієм (sidecar шукає їх
+відносно `app/src-tauri/binaries/`). **Ручне налаштування `.venv` більше
+не потрібне** — обидва скрипти самі викликають
+[`scripts/bootstrap_venv.py`](../scripts/bootstrap_venv.py) перед
+запуском: створюють `.venv`, якщо його ще немає, і ставлять залежності
+(з автовизначенням старших NVIDIA GPU — compute capability < 7.5 —
+через `nvidia-smi`, тоді ставиться `cu126`-збірка torch замість
+звичайної). Якщо `.venv` вже готовий, крок швидкий і нічого не чіпає
+(перевірено: другий запуск лише друкує "вже готовий" і одразу
+відкриває вікно).
 
 **Хто оновлює:** з 2026-08-26 — GitHub Actions, автоматично
 ([`.github/workflows/build-release-binaries.yml`](../.github/workflows/build-release-binaries.yml)).

@@ -10,5 +10,10 @@
 # error message, because the frontend assets silently fail to resolve.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+PY=python3
+command -v python3 >/dev/null 2>&1 || PY=python
+"$PY" "$REPO_ROOT/scripts/bootstrap_venv.py"
+
 cd "$REPO_ROOT/app/src-tauri"
 exec "$REPO_ROOT/release/chess-tauri-zero-current-linux-x86_64"
