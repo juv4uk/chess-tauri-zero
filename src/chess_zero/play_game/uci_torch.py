@@ -619,11 +619,28 @@ def _dispatch(words, env):
         # Hot-reload the live player (and shared selfplay/train model)
         # from data/model_torch/model_best.pt if a promoted checkpoint
         # exists, without restarting the process.
-        if not me_player:
-            me_player = get_player()
-        with _me_player_lock:
-            found = reload_models(get_shared_model(), me_player.model)
-        print(f"reloadresult {'ok' if found else 'nothing-to-reload'}")
+        #
+        # BH-05 fix (real bug from an external audit, independently
+        # verified): manual reload used to only take _me_player_lock,
+        # not _train_lock -- while training runs detached in the
+        # background (Escape during "Тренування"), a promotion's own
+        # save_checkpoint(candidate_model, BEST_MODEL_PATH) can be
+        # mid-write to that exact file at the same moment a manual
+        # reload's torch.load() tries to read it. _me_player_lock only
+        # protects the in-memory tensor assignment AFTER the read
+        # succeeds -- it does nothing for a read racing a concurrent
+        # write to the file itself. There's also no real need to
+        # reload while training is live: _train_worker already
+        # hot-reloads on its own promotion, so refusing here loses
+        # nothing.
+        if _train_thread is not None and _train_thread.is_alive():
+            print("reloadresult busy")
+        else:
+            if not me_player:
+                me_player = get_player()
+            with _me_player_lock:
+                found = reload_models(get_shared_model(), me_player.model)
+            print(f"reloadresult {'ok' if found else 'nothing-to-reload'}")
         sys.stdout.flush()
     elif words[0] == "stop":
         pass

@@ -224,6 +224,32 @@ class TestSelfplayTrainMutualExclusion(UciTorchTestCase):
         self.engine.expect(lambda l: l.startswith("selfplayresult "), timeout=60)
 
 
+class TestReloadDuringTraining(UciTorchTestCase, ModelStateBackupMixin):
+    """Regression test for BH-05, a real bug found by an external
+    audit and independently verified: manual `reload` only took
+    _me_player_lock, not _train_lock -- while training runs (detached
+    in the background via Escape, or just normally), a promotion's
+    own checkpoint write could be mid-flight the exact moment a
+    manual reload's torch.load() tries to read the same file."""
+
+    def setUp(self):
+        super().setUp()
+        self.backup_model()
+
+    def tearDown(self):
+        self.restore_model()
+        super().tearDown()
+
+    def test_reload_refused_while_training_is_live(self):
+        self.engine.send("train start")
+        self.engine.expect(lambda l: l == "info trainprogress selfplay")
+        self.engine.send("reload")
+        result = self.engine.expect(lambda l: l.startswith("reloadresult"))
+        self.assertEqual(result, "reloadresult busy")
+        # let the cycle finish so the engine can quit cleanly in tearDown
+        self.engine.expect(lambda l: l.startswith("trainresult") or l.startswith("trainerror"), timeout=90)
+
+
 class TestHumanGameRecording(UciTorchTestCase):
     """Regression test for a real bug caught while building this
     feature: the FEN used to come from this process's own (stale-by-

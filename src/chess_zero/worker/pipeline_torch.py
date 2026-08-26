@@ -129,8 +129,21 @@ def record_cycle_result(cycle_idx, win_rate, promoted):
         "evaluated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     record_path = os.path.join(NEXT_GEN_DIR, f"model_cycle{cycle_idx}.json")
-    with open(record_path, "w") as f:
+    # BH-04 fix (real bug from an external audit, independently
+    # verified): writing record_path directly with "w" leaves a
+    # window where a crash/power-loss mid-write produces a truncated,
+    # unparseable JSON file -- and every future model_history() call
+    # would then either crash outright or (before this fix) silently
+    # poison the whole journal read. Write-to-temp + os.replace makes
+    # the visible file always either the OLD complete version or the
+    # NEW complete version, never a partial one (os.replace is atomic
+    # on both POSIX and Windows for a rename within the same directory).
+    tmp_path = record_path + ".tmp"
+    with open(tmp_path, "w") as f:
         json.dump(record, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, record_path)
 
 
 def model_history():
@@ -138,13 +151,27 @@ def model_history():
     and rejected alike), sorted by cycle number. NEXT_GEN_DIR itself
     may not exist at all yet -- os.makedirs is lazy, it's only created
     on the first recorded cycle -- so a missing directory is treated
-    as "no history yet", not an error."""
+    as "no history yet", not an error.
+
+    A record that fails to parse (a pre-existing file from before the
+    atomic-write fix, or damage from something other than a write
+    crash) is quarantined -- renamed aside with a .corrupt suffix so
+    it stops being retried on every future call -- rather than either
+    crashing this whole function (poisoning every subsequent lineage
+    lookup because of ONE bad file) or silently vanishing with no
+    trace on disk."""
     if not os.path.isdir(NEXT_GEN_DIR):
         return []
     records = []
     for path in glob.glob(os.path.join(NEXT_GEN_DIR, "model_cycle*.json")):
-        with open(path) as f:
-            records.append(json.load(f))
+        try:
+            with open(path) as f:
+                records.append(json.load(f))
+        except (json.JSONDecodeError, OSError):
+            try:
+                os.replace(path, path + ".corrupt")
+            except OSError:
+                pass
     records.sort(key=lambda r: r["cycle"])
     return records
 

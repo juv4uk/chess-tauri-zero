@@ -152,9 +152,20 @@ def train_epochs(model, optimizer, data_dir, epochs=1, batch_size=32):
 
 
 def save_checkpoint(model, path):
+    # Atomic write (belt-and-suspenders alongside uci_torch.py's
+    # `reload` UCI command now refusing while training is live, BH-05
+    # from an external audit): torch.save() directly to `path` leaves
+    # a window where a reader (a manual reload, or anything else that
+    # might one day read this file without going through the UCI
+    # busy-check) could see a partially-written checkpoint. Saving to
+    # a same-directory temp file and os.replace()-ing it in is atomic
+    # on both POSIX and Windows, so any reader always sees either the
+    # complete old file or the complete new one, never a partial one.
     import os
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    torch.save(model.state_dict(), path)
+    tmp_path = path + ".tmp"
+    torch.save(model.state_dict(), tmp_path)
+    os.replace(tmp_path, path)
 
 
 def load_checkpoint(model, path):
