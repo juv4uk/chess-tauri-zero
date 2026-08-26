@@ -48,6 +48,10 @@ jobs:
         working-directory: app/src-tauri
         run: cargo build --release
 
+      - name: Rust unit tests (EngineState -- the real generation-tag race fixed 2026-08-26)
+        working-directory: app/src-tauri
+        run: cargo test --release
+
       - uses: actions/upload-artifact@v4
         with:
           name: linux-binary
@@ -88,8 +92,36 @@ jobs:
           name: windows-sidecar
           path: app/src-tauri/binaries/uci-engine-x86_64-pc-windows-msvc.exe
 
+  test-python-and-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies (CPU torch -- correctness, not speed, is what these tests check)
+        run: pip install -r requirements.txt
+
+      - name: Python UCI protocol tests (real regression tests for 2026-08-26's live bugs)
+        working-directory: src
+        run: python3 -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Frontend module-syntax check (the REAL check -- see why below)
+        run: |
+          # A missing closing brace in app.js broke the entire app live
+          # on 2026-08-26 and went undetected all session because
+          # `node --check app.js` (plain) silently passes even on a
+          # real ES-module SyntaxError -- it doesn't parse in module
+          # mode by default. `--input-type=module` is what actually
+          # matches how index.html's `<script type="module">` (and
+          # the Tauri webview) parses this file; this is the check
+          # that would have caught that bug immediately.
+          node --check --input-type=module < app/web/app.js
+
   publish-current:
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, test-python-and-frontend]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

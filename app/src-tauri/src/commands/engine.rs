@@ -179,3 +179,69 @@ pub fn engine_drain(state: State<'_, EngineState>) -> Result<Vec<String>, String
     let mut buf = state.output.lock().map_err(|e| e.to_string())?;
     Ok(buf.drain(..).collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // engine_start/engine_kill themselves need a real Tauri AppHandle
+    // (to spawn a real sidecar process) and aren't unit-testable
+    // without that -- these tests instead cover the EngineState
+    // primitives directly (this module's own private fields, visible
+    // here since `tests` is a child module), specifically the
+    // generation-counter arithmetic that was the actual site of a
+    // real, CONFIRMED race found and fixed earlier this session (a
+    // stale spawn's event-loop task could clear a NEWER child's slot).
+
+    #[test]
+    fn engine_state_starts_empty_at_generation_zero() {
+        let state = EngineState::default();
+        assert!(state.child.lock().unwrap().is_none());
+        assert!(state.output.lock().unwrap().is_empty());
+        assert_eq!(state.generation.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn generation_increments_are_monotonic_and_unique_per_caller() {
+        // Mirrors engine_start's own `fetch_add(1, ...) + 1` pattern
+        // exactly (fetch_add returns the OLD value) -- an off-by-one
+        // here would silently make two consecutive spawns share a
+        // generation id and reopen the exact race this counter exists
+        // to close.
+        let state = EngineState::default();
+        let gen1 = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let gen2 = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        assert_eq!(gen1, 1);
+        assert_eq!(gen2, 2);
+        assert_ne!(gen1, gen2);
+    }
+
+    #[test]
+    fn stale_generation_no_longer_matches_after_a_newer_spawn() {
+        // Regression test for the real race: a stale spawn's captured
+        // generation must NOT equal the current one after a newer
+        // spawn has happened -- engine_start's event-loop task relies
+        // on exactly this check before clearing child_slot.
+        let state = EngineState::default();
+        let stale_generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1; // 1st engine_start
+        let _current_generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1; // 2nd engine_start
+        assert_ne!(
+            stale_generation,
+            state.generation.load(Ordering::SeqCst),
+            "a stale spawn's generation must not match the current one after a newer spawn"
+        );
+    }
+
+    #[test]
+    fn output_buffer_drains_in_fifo_order_and_empties() {
+        let state = EngineState::default();
+        {
+            let mut buf = state.output.lock().unwrap();
+            buf.push_back("uciok".to_string());
+            buf.push_back("readyok".to_string());
+        }
+        let drained: Vec<String> = state.output.lock().unwrap().drain(..).collect();
+        assert_eq!(drained, vec!["uciok".to_string(), "readyok".to_string()]);
+        assert!(state.output.lock().unwrap().is_empty());
+    }
+}
