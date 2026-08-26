@@ -241,17 +241,30 @@ def _background_train_loop():
     global _train_thread
     while True:
         time.sleep(BG_CHECK_INTERVAL_SEC)
-        if _human_possibly_active():
-            continue
-        if _selfplay_thread is not None and _selfplay_thread.is_alive():
-            continue
-        if machine_busy():
-            continue
-        with _train_lock:
-            if _train_thread is not None and _train_thread.is_alive():
+        # PLAUSIBLE bug from today's 4-agent audit (Python Logic
+        # Auditor, not reproduced but structurally real): this whole
+        # loop had no exception guard -- any uncaught exception on any
+        # iteration (in _human_possibly_active/machine_busy/thread
+        # creation) would kill this daemon thread silently, with no
+        # traceback anywhere a client could see, permanently ending
+        # background training for the rest of the process's life with
+        # zero indication anything went wrong. Reusing the [tag] error
+        # format from the main crash-guard fixed earlier today.
+        try:
+            if _human_possibly_active():
                 continue
-            _train_thread = threading.Thread(target=_train_worker, kwargs={"background": True}, daemon=True)
-            _train_thread.start()
+            if _selfplay_thread is not None and _selfplay_thread.is_alive():
+                continue
+            if machine_busy():
+                continue
+            with _train_lock:
+                if _train_thread is not None and _train_thread.is_alive():
+                    continue
+                _train_thread = threading.Thread(target=_train_worker, kwargs={"background": True}, daemon=True)
+                _train_thread.start()
+        except Exception as e:
+            print(f"info error [background-train] {e}")
+            sys.stdout.flush()
 
 
 def start():
