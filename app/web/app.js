@@ -293,7 +293,16 @@ async function toggleSelfplay() {
   if (mode === "selfplay") {
     selfplayStopRequested = true;
     setStatus("Зупиняю самогру (двигун завершить поточний хід)...");
-    await reliableSend("selfplay stop");
+    try {
+      await reliableSend("selfplay stop");
+    } catch (err) {
+      // mode recovery here doesn't depend on this call -- the original
+      // invocation that started selfplay owns its own try/finally
+      // below and will reset mode once its pollUntil settles. This
+      // catch only stops an unrelated unhandled rejection from
+      // surfacing for what's just a best-effort stop request.
+      setStatus(`Не вдалося надіслати команду зупинки: ${err}`);
+    }
     return;
   }
   if (mode !== "idle") return;
@@ -308,8 +317,14 @@ async function toggleSelfplay() {
   render();
   setStatus("Самогра...");
 
-  await reliableSend("selfplay start");
   try {
+    // Real bug found in today's 4-agent audit: "selfplay start" used
+    // to be sent OUTSIDE this try/finally -- if it threw (e.g. a dead
+    // sidecar reliableSend couldn't respawn), mode stayed stuck at
+    // "selfplay" forever, with no pollUntil ever started to eventually
+    // time out and recover it. Moved inside so the finally below is
+    // guaranteed to run no matter which step fails.
+    await reliableSend("selfplay start");
     await pollUntil(
       (line) => line.startsWith("selfplayresult "),
       (line) => {
