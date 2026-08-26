@@ -12,6 +12,15 @@ rem fail to resolve.
 setlocal
 set REPO_ROOT=%~dp0..
 
+where git >nul 2>nul
+if not errorlevel 1 (
+    if exist "%REPO_ROOT%\.git" (
+        echo Оновлюю репозиторій ^(git pull^)...
+        git -C "%REPO_ROOT%" pull --ff-only
+        if errorlevel 1 echo git pull не вдався ^(локальні зміни або немає інтернету?^) -- продовжую з тим, що вже є.
+    )
+)
+
 where python >nul 2>nul
 if errorlevel 1 (
     echo Python не знайдено на PATH. Встанови Python 3.10+ ^(python.org або winget install Python.Python.3^) і повтори.

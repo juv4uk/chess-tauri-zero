@@ -11,6 +11,12 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+if command -v git >/dev/null 2>&1 && [ -d "$REPO_ROOT/.git" ]; then
+    echo "Оновлюю репозиторій (git pull)..."
+    git -C "$REPO_ROOT" pull --ff-only \
+        || echo "git pull не вдався (локальні зміни або немає інтернету?) -- продовжую з тим, що вже є."
+fi
+
 PY=python3
 command -v python3 >/dev/null 2>&1 || PY=python
 "$PY" "$REPO_ROOT/scripts/bootstrap_venv.py"
