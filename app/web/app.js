@@ -288,6 +288,16 @@ function isErrorLine(line) {
   return line.startsWith("info error ");
 }
 
+// Diagnostic aid: logs every raw line drained from the engine to the
+// devtools console (F12), including the [stderr]/[error]/[terminated]
+// lines the Rust side (commands/engine.rs) tags on a dead/crashed
+// sidecar -- these carry real detail (e.g. a launcher's own "failed
+// to run <python path> <script path>: <os error>" message on Windows)
+// that the plain caught-error text shown in the UI doesn't include.
+function logEngineLine(line) {
+  console.debug("[engine]", line);
+}
+
 async function waitForLine(predicate, timeoutMs = 120000) {
   const myEpoch = engineEpoch;
   const start = Date.now();
@@ -297,6 +307,7 @@ async function waitForLine(predicate, timeoutMs = 120000) {
     }
     const lines = await invoke("engine_drain");
     for (const line of lines) {
+      logEngineLine(line);
       if (predicate(line)) return line;
       if (isErrorLine(line)) throw new Error(line.slice("info error ".length));
     }
@@ -317,6 +328,7 @@ async function pollUntil(matchPredicate, onLine, timeoutMs = 600000) {
     }
     const lines = await invoke("engine_drain");
     for (const line of lines) {
+      logEngineLine(line);
       onLine(line);
       if (matchPredicate(line)) return line;
       if (isErrorLine(line)) throw new Error(line.slice("info error ".length));
