@@ -20,6 +20,7 @@ const resignBtn = document.getElementById("btn-resign");
 const undoBtn = document.getElementById("btn-undo");
 const selfplayBtn = document.getElementById("btn-selfplay");
 const trainBtn = document.getElementById("btn-train");
+const reloadBtn = document.getElementById("btn-reload");
 
 const game = new Chess();
 const moveHistory = []; // UCI strings, sent to the engine as "position startpos moves ..."
@@ -211,6 +212,7 @@ function updateControlsEnabled() {
   // cycle to completion) -- disabled for the whole busy window, not just
   // while some OTHER mode is active.
   trainBtn.disabled = busy;
+  reloadBtn.disabled = busy;
   colorButtons.forEach((b) => (b.disabled = busy));
   difficultyButtons.forEach((b) => {
     b.disabled = busy;
@@ -331,6 +333,33 @@ async function startTraining() {
   }
 }
 
+// A promoted `train start` writes a new checkpoint to disk, but the
+// sidecar keeps using whatever weights it already loaded until told
+// otherwise -- this sends the `reload` command added alongside the
+// hot-reload backend support so a promoted model can actually be
+// played against without restarting the whole engine.
+async function reloadModel() {
+  if (mode !== "idle") return;
+  mode = "train"; // reuse the same busy-gate as training; this is a quick, single round-trip
+  updateControlsEnabled();
+  setStatus("Перезавантажую модель...");
+  try {
+    await reliableSend("reload");
+    const line = await waitForLine((l) => l.startsWith("reloadresult "));
+    const result = line.slice("reloadresult ".length);
+    setStatus(
+      result === "ok"
+        ? "Модель перезавантажена."
+        : "Нема новішого чекпоінта -- модель без змін."
+    );
+  } catch (err) {
+    setStatus(`Помилка перезавантаження: ${err}`);
+  } finally {
+    mode = "idle";
+    updateControlsEnabled();
+  }
+}
+
 colorButtons.forEach((b) =>
   b.addEventListener("click", () => {
     if (mode !== "idle") return;
@@ -351,6 +380,7 @@ resignBtn.addEventListener("click", resign);
 undoBtn.addEventListener("click", undo);
 selfplayBtn.addEventListener("click", toggleSelfplay);
 trainBtn.addEventListener("click", startTraining);
+reloadBtn.addEventListener("click", reloadModel);
 
 async function init() {
   render();
