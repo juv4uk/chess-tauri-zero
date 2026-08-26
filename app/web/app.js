@@ -204,6 +204,18 @@ async function handshake() {
   await waitForLine((l) => l === "readyok");
 }
 
+// Real bug #8 from today's 4-agent audit (Frontend + Python Logic
+// Auditors): the Python-side crash-guard's `info error [<cmd>] <msg>`
+// line (added earlier today) was never watched for here -- a caught
+// backend error was invisible to the user, who just saw a generic
+// "Тайм-аут" after 120s-10min instead of the real reason. Checked
+// AFTER the caller's own predicate so a command that legitimately
+// wants to see "info error " text itself (none currently do) still
+// could.
+function isErrorLine(line) {
+  return line.startsWith("info error ");
+}
+
 async function waitForLine(predicate, timeoutMs = 120000) {
   const myEpoch = engineEpoch;
   const start = Date.now();
@@ -214,6 +226,7 @@ async function waitForLine(predicate, timeoutMs = 120000) {
     const lines = await invoke("engine_drain");
     for (const line of lines) {
       if (predicate(line)) return line;
+      if (isErrorLine(line)) throw new Error(line.slice("info error ".length));
     }
     await new Promise((r) => setTimeout(r, 150));
   }
@@ -234,6 +247,7 @@ async function pollUntil(matchPredicate, onLine, timeoutMs = 600000) {
     for (const line of lines) {
       onLine(line);
       if (matchPredicate(line)) return line;
+      if (isErrorLine(line)) throw new Error(line.slice("info error ".length));
     }
     await new Promise((r) => setTimeout(r, 150));
   }

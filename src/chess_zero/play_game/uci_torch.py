@@ -280,7 +280,12 @@ def start():
             # respawned -- masking the real error instead of surfacing
             # it. Now one bad command reports itself and the engine
             # keeps running.
-            print(f"info error {e}")
+            # Tagged with the failing command's own name (words[0], the
+            # same token _dispatch() switched on) so a client watching
+            # for "info error [<cmd>] " can match it to whatever it was
+            # actually waiting for -- part of the same audit fix as the
+            # [selfplay] tags elsewhere in this file.
+            print(f"info error [{words[0]}] {e}")
             sys.stdout.flush()
 
 
