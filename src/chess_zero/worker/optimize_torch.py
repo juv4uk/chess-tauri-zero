@@ -74,15 +74,36 @@ def load_dataset(data_dir):
     Each record stores the raw board FEN (ChessEnv.observation), not
     planes -- canon_input_planes() does the same side-to-move flip
     used at inference time (expand_and_evaluate), so training sees
-    exactly the encoding the model is actually queried with."""
+    exactly the encoding the model is actually queried with.
+
+    Real P0 bug found by an external audit and independently verified
+    against this exact source before fixing (witness reproduced here,
+    not just trusted): canon_input_planes() flips the BOARD to white's
+    perspective for a black-to-move FEN, but the recorded policy
+    vector (self.moves in player_chess_torch.py) is written in RAW
+    board orientation -- expand_and_evaluate() already flips the
+    network's canonical policy output back to raw orientation via
+    flip_policy() before it ever reaches the MCTS tree stats, so
+    every self-play (fen, policy) pair is internally consistent in
+    RAW orientation. Canonicalizing only the FEN here, without also
+    flipping the policy, silently misaligns every black-to-move
+    training example: the state tensor is in white's perspective, the
+    policy target stays indexed for the actual (black) board. Half of
+    all self-play training data was training the policy head against
+    the wrong move index. flip_policy() is the exact inverse of the
+    inference-time flip and is reused here rather than re-derived."""
     import sys
     sys.path.insert(0, ".")
-    from chess_zero.env.chess_env import canon_input_planes
+    from chess_zero.env.chess_env import canon_input_planes, is_black_turn
+    from chess_zero.agent.player_chess_torch import flip_policy
     from chess_zero.lib.data_helper_torch import get_game_data_filenames, read_game_data_from_file
 
     states, policies, values = [], [], []
     for path in get_game_data_filenames(data_dir):
         for fen, policy, value in read_game_data_from_file(path):
+            policy = np.asarray(policy, dtype=np.float32)
+            if is_black_turn(fen):
+                policy = flip_policy(policy)
             states.append(canon_input_planes(fen))
             policies.append(policy)
             values.append(value)
