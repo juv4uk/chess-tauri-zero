@@ -10,7 +10,7 @@ Zero vX.Y.Z`, береться з `app/src-tauri/tauri.conf.json`, не хард
 | Файл | Платформа |
 |---|---|
 | `chess-tauri-zero-current-linux-x86_64` | Linux, `x86_64-unknown-linux-gnu` |
-| `chess-tauri-zero-current-windows-x86_64.exe` | Windows, `x86_64-pc-windows-gnu` (крос-компільовано) |
+| `chess-tauri-zero-current-windows-x86_64.exe` | Windows, `x86_64-pc-windows-msvc` (нативна збірка на `windows-latest` через GitHub Actions) |
 
 ## Як реально запускати (важливо!)
 
@@ -45,8 +45,13 @@ release\run-windows.bat
 налаштуй `.venv` за `readme.md` (venv/`src/` мають лишатись поруч із
 репозиторієм — sidecar шукає їх відносно `app/src-tauri/binaries/`).
 
-**Хто оновлює:** щоразу, коли є реліз-вартий набір змін (не кожен
-дрібний коміт з документацією) — перебілдити обидва (`cargo build
---release` + крос-компіляція під Windows, див.
-`docs/tauri-app-uk.md`), скопіювати сюди з новими іменами (`current-*`,
-без зміни назви), закомітити разом зі змінами коду в тому ж пуші.
+**Хто оновлює:** з 2026-08-26 — GitHub Actions, автоматично
+([`.github/workflows/build-release-binaries.yml`](../.github/workflows/build-release-binaries.yml)).
+Кожен пуш у `master`, що зачіпає код (не лише `docs/`/`release/`/`*.md`),
+запускає нативну збірку на `ubuntu-latest` (Linux) і `windows-latest`
+(Windows, справжній MSVC-тулчейн — більше **не** крос-компіляція з
+Guix/mingw), і окремий коміт-бот перезаписує обидва файли тут з
+результатом (`[skip ci]` у повідомленні коміту, щоб не тригерити себе
+знову). Ручний прогін теж можливий через `workflow_dispatch` у вкладці
+Actions. Локальна крос-компіляція (`docs/windows-local-build-uk.md`)
+лишається як резервний шлях, якщо CI недоступний.

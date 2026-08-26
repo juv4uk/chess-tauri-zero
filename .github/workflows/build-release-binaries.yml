@@ -1,0 +1,116 @@
+name: Build release binaries
+
+# Builds chess-tauri-zero-app natively on each target OS (no more
+# cross-compiling Windows from Guix/mingw on the maintainer's machine)
+# and updates release/chess-tauri-zero-current-* with the result. See
+# release/README.md for what these files are and how to run them.
+#
+# bundle.active is false in tauri.conf.json, so this is a plain
+# `cargo build --release`, not a `tauri build`/installer step -- the
+# resulting binary reads ../web and the sidecar from the filesystem at
+# launch (see release/README.md's CWD note), it does not embed them.
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "release/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        working-directory: app/src-tauri
+        run: cargo build --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-binary
+          path: app/src-tauri/target/release/chess-tauri-zero-app
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build sidecar launcher (native MSVC)
+        working-directory: app/uci-engine-launcher
+        run: cargo build --release
+
+      - name: Install sidecar into src-tauri/binaries
+        shell: bash
+        run: |
+          cp app/uci-engine-launcher/target/release/uci-engine-launcher.exe \
+             app/src-tauri/binaries/uci-engine-x86_64-pc-windows-msvc.exe
+
+      - name: Build app
+        working-directory: app/src-tauri
+        run: cargo build --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-binary
+          path: app/src-tauri/target/release/chess-tauri-zero-app.exe
+
+  publish-current:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-binary
+          path: dl-linux
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-binary
+          path: dl-windows
+
+      - name: Place binaries into release/
+        run: |
+          cp dl-linux/chess-tauri-zero-app release/chess-tauri-zero-current-linux-x86_64
+          chmod +x release/chess-tauri-zero-current-linux-x86_64
+          cp dl-windows/chess-tauri-zero-app.exe release/chess-tauri-zero-current-windows-x86_64.exe
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add release/chess-tauri-zero-current-linux-x86_64 release/chess-tauri-zero-current-windows-x86_64.exe
+          if git diff --cached --quiet; then
+            echo "Binaries unchanged, nothing to commit."
+            exit 0
+          fi
+          git commit -m "chore(release): rebuild current binaries via CI [skip ci]"
+          git push
