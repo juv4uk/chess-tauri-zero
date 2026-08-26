@@ -76,6 +76,18 @@
       max-height: 80px;
       overflow-y: auto;
     }
+    #history-table {
+      width: 100%;
+      font-size: 12px;
+      border-collapse: collapse;
+    }
+    #history-table:not(:empty) { margin-top: 4px; }
+    #history-table th, #history-table td {
+      text-align: left;
+      padding: 3px 6px;
+      border-bottom: 1px solid #333;
+    }
+    #history-table th { color: #999; font-weight: normal; }
   </style>
 </head>
 <body>
@@ -107,7 +119,11 @@
       <button id="btn-train">Тренування (1 цикл)</button>
       <button id="btn-reload">Перезавантажити модель</button>
     </div>
+    <div class="control-row">
+      <button id="btn-history">Історія поколінь моделі</button>
+    </div>
     <div id="train-log"></div>
+    <table id="history-table"></table>
   </div>
 
   <script type="module" src="app.js"></script>

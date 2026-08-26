@@ -11,6 +11,9 @@ proving the cycle itself is correct end-to-end. See
 docs/pytorch-self-play-loop-plan-uk.md.
 """
 import copy
+import datetime
+import glob
+import json
 import os
 import sys
 import time
@@ -66,11 +69,46 @@ def run_cycle(best_model, device, games_per_cycle=2, sims_per_move=30, max_halfm
         gen_path = os.path.join(NEXT_GEN_DIR, f"model_cycle{cycle_idx}.pt")
         save_checkpoint(candidate_model, gen_path)
         save_checkpoint(candidate_model, BEST_MODEL_PATH)
+        record_promotion(cycle_idx, win_rate)
         print(f"PROMOTED: candidate saved to {gen_path} and {BEST_MODEL_PATH}")
         return candidate_model
     else:
         print("Candidate not promoted, keeping current best.")
         return best_model
+
+
+def record_promotion(cycle_idx, win_rate):
+    """Writes model_cycle{N}.json next to the checkpoint run_cycle just
+    saved -- P0 "generation journal + quality curve" from
+    docs/development-plan-uk.md: run_cycle already computed win_rate,
+    it just never used to be saved anywhere but a print() line. One
+    record covers both the journal (which cycle got promoted, when)
+    and the quality curve (win_rate over cycles)."""
+    os.makedirs(NEXT_GEN_DIR, exist_ok=True)
+    record = {
+        "cycle": cycle_idx,
+        "win_rate": win_rate,
+        "promoted_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    record_path = os.path.join(NEXT_GEN_DIR, f"model_cycle{cycle_idx}.json")
+    with open(record_path, "w") as f:
+        json.dump(record, f)
+
+
+def model_history():
+    """Every promotion record found in NEXT_GEN_DIR, sorted by cycle
+    number. NEXT_GEN_DIR itself may not exist at all yet -- os.makedirs
+    is lazy, it's only created on the first real promotion (confirmed
+    by the Critic phase of the Disney-method analysis) -- so a missing
+    directory is treated as "no history yet", not an error."""
+    if not os.path.isdir(NEXT_GEN_DIR):
+        return []
+    records = []
+    for path in glob.glob(os.path.join(NEXT_GEN_DIR, "model_cycle*.json")):
+        with open(path) as f:
+            records.append(json.load(f))
+    records.sort(key=lambda r: r["cycle"])
+    return records
 
 
 if __name__ == "__main__":

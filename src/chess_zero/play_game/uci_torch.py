@@ -21,7 +21,9 @@ from chess_zero.agent.load_weights import load_torch_model
 from chess_zero.agent.player_chess_torch import TorchChessPlayer, PlayConfig
 from chess_zero.agent.batched_predictor import BatchedPredictor
 from chess_zero.env.chess_env import ChessEnv
-from chess_zero.worker.pipeline_torch import run_cycle
+import json
+
+from chess_zero.worker.pipeline_torch import run_cycle, model_history
 
 
 def human_play_config() -> PlayConfig:
@@ -261,6 +263,13 @@ def start():
                     else:
                         _train_thread = threading.Thread(target=_train_worker, daemon=True)
                         _train_thread.start()
+        elif words[0] == "history":
+            # P0 "generation journal + quality curve": one line per
+            # promoted cycle (cycle/win_rate/promoted_at), oldest first.
+            for record in model_history():
+                print(f"historyentry {json.dumps(record)}")
+            print("historyresult ok")
+            sys.stdout.flush()
         elif words[0] == "reload":
             # Hot-reload the live player (and shared selfplay/train model)
             # from data/model_torch/model_best.pt if a promoted checkpoint

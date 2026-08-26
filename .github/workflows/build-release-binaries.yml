@@ -67,7 +67,11 @@ jobs:
       - name: Install sidecar into src-tauri/binaries
         shell: bash
         run: |
-          cp app/uci-engine-launcher/target/release/uci-engine-launcher.exe \
+          # The crate is named uci-engine-launcher, but Cargo.toml's own
+          # [[bin]] section names the binary "uci-engine" -- confirmed by
+          # a real CI failure (cp: cannot stat ...-launcher.exe) before
+          # this line existed.
+          cp app/uci-engine-launcher/target/release/uci-engine.exe \
              app/src-tauri/binaries/uci-engine-x86_64-pc-windows-msvc.exe
 
       - name: Build app

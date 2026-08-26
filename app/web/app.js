@@ -21,6 +21,8 @@ const undoBtn = document.getElementById("btn-undo");
 const selfplayBtn = document.getElementById("btn-selfplay");
 const trainBtn = document.getElementById("btn-train");
 const reloadBtn = document.getElementById("btn-reload");
+const historyBtn = document.getElementById("btn-history");
+const historyTableEl = document.getElementById("history-table");
 
 const game = new Chess();
 const moveHistory = []; // UCI strings, sent to the engine as "position startpos moves ..."
@@ -213,6 +215,7 @@ function updateControlsEnabled() {
   // while some OTHER mode is active.
   trainBtn.disabled = busy;
   reloadBtn.disabled = busy;
+  historyBtn.disabled = busy;
   colorButtons.forEach((b) => (b.disabled = busy));
   difficultyButtons.forEach((b) => {
     b.disabled = busy;
@@ -360,6 +363,53 @@ async function reloadModel() {
   }
 }
 
+// P0 "generation journal + quality curve": lists every promoted
+// checkpoint the backend recorded (see pipeline_torch.record_promotion),
+// oldest first, one round-trip via the `history` UCI command.
+async function showHistory() {
+  if (mode !== "idle") return;
+  mode = "train"; // reuse the same busy-gate as training/reload for this one round-trip
+  updateControlsEnabled();
+  setStatus("Читаю історію поколінь моделі...");
+  const entries = [];
+  try {
+    await reliableSend("history");
+    await pollUntil(
+      (line) => line === "historyresult ok",
+      (line) => {
+        if (line.startsWith("historyentry ")) {
+          entries.push(JSON.parse(line.slice("historyentry ".length)));
+        }
+      }
+    );
+    renderHistory(entries);
+    setStatus(
+      entries.length
+        ? `Історія: ${entries.length} промоушн(и/ів).`
+        : "Історія порожня -- ще жодна модель не промоутилась."
+    );
+  } catch (err) {
+    setStatus(`Помилка читання історії: ${err}`);
+  } finally {
+    mode = "idle";
+    updateControlsEnabled();
+  }
+}
+
+function renderHistory(entries) {
+  if (!entries.length) {
+    historyTableEl.innerHTML = "";
+    return;
+  }
+  const rows = entries
+    .map(
+      (e) =>
+        `<tr><td>${e.cycle}</td><td>${(e.win_rate * 100).toFixed(1)}%</td><td>${new Date(e.promoted_at).toLocaleString()}</td></tr>`
+    )
+    .join("");
+  historyTableEl.innerHTML = `<tr><th>Цикл</th><th>Win-rate</th><th>Коли</th></tr>${rows}`;
+}
+
 colorButtons.forEach((b) =>
   b.addEventListener("click", () => {
     if (mode !== "idle") return;
@@ -381,6 +431,7 @@ undoBtn.addEventListener("click", undo);
 selfplayBtn.addEventListener("click", toggleSelfplay);
 trainBtn.addEventListener("click", startTraining);
 reloadBtn.addEventListener("click", reloadModel);
+historyBtn.addEventListener("click", showHistory);
 
 async function init() {
   render();
