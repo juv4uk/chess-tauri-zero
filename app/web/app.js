@@ -456,7 +456,7 @@ async function forceStopEngine() {
     await invoke("engine_start");
     await handshake();
     await applyDifficulty();
-    setStatus("Рушій примусово перезапущено (Escape). Поточний хід/тренування перервано.");
+    setStatus("Рушій примусово перезапущено (Escape). Поточну дію перервано.");
   } catch (err) {
     setStatus(`Помилка примусової зупинки: ${err}`);
   } finally {
@@ -469,9 +469,17 @@ async function forceStopEngine() {
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (mode === "selfplay") {
-    toggleSelfplay(); // same path as clicking "Зупинити самогру"
-  } else if (mode === "thinking" || mode === "train") {
+  // All three busy modes now force-stop uniformly. selfplay used to
+  // just resend "selfplay stop" (same as the button) -- real bug found
+  // in today's 4-agent audit: that's a polite, ASYNC request the
+  // engine may never see in time if it's genuinely stuck (not just
+  // between moves), so Escape gave false confidence of an immediate
+  // stop while the actual 600s pollUntil wait kept running unchanged.
+  // Escape is meant to be a hard "stop the process" panic key (per the
+  // owner's own request), not a second, identical polite ask -- the
+  // dedicated "Зупинити самогру" BUTTON still uses the graceful
+  // toggleSelfplay() path for a deliberate, non-emergency stop.
+  if (mode === "thinking" || mode === "train" || mode === "selfplay") {
     forceStopEngine();
   }
 });
