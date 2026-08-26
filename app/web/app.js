@@ -38,6 +38,16 @@ let resigned = false;
 let mode = "idle"; // "idle" | "thinking" | "selfplay" | "train"
 let selfplayStopRequested = false;
 
+// Bumped by forceStopEngine() (Escape). Real bug found in today's
+// 4-agent audit (Frontend Auditor): a poll loop from BEFORE a kill+
+// respawn used to keep calling engine_drain for up to its full 10min
+// timeout, racing the new session's own handshake reads and able to
+// apply a stale heatmap or falsely fail forceStopEngine's own
+// handshake. Every waitForLine/pollUntil call captures the epoch it
+// started with and self-cancels the moment it changes, instead of
+// racing the new session.
+let engineEpoch = 0;
+
 // P0 "теплокарта наступного ходу" (root-only): destination square ->
 // visit count from the most recent "info mctsroot <json>" line, i.e.
 // what the engine considered right before the move it just made.
@@ -195,8 +205,12 @@ async function handshake() {
 }
 
 async function waitForLine(predicate, timeoutMs = 120000) {
+  const myEpoch = engineEpoch;
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    if (engineEpoch !== myEpoch) {
+      throw new Error("Рушій перезапущено (Escape) -- очікування скасовано.");
+    }
     const lines = await invoke("engine_drain");
     for (const line of lines) {
       if (predicate(line)) return line;
@@ -210,8 +224,12 @@ async function waitForLine(predicate, timeoutMs = 120000) {
 // terminal one) -- used for selfplay/train streams where intermediate
 // lines (selfplaymove/trainprogress) matter, not just the final result.
 async function pollUntil(matchPredicate, onLine, timeoutMs = 600000) {
+  const myEpoch = engineEpoch;
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    if (engineEpoch !== myEpoch) {
+      throw new Error("Рушій перезапущено (Escape) -- очікування скасовано.");
+    }
     const lines = await invoke("engine_drain");
     for (const line of lines) {
       onLine(line);
@@ -463,6 +481,7 @@ function renderHistory(entries) {
 // Rust side for why engine_start alone can't do this (it's idempotent,
 // a no-op while the process is alive, even if it's stuck).
 async function forceStopEngine() {
+  engineEpoch++; // invalidate any poll loop already in flight from before this kill+respawn
   setStatus("Escape -- примусово зупиняю рушій...");
   mode = "train"; // block controls during the kill+respawn round-trip
   updateControlsEnabled();
