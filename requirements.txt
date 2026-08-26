@@ -1,7 +1,8 @@
-python-chess==0.25.1
-tensorflow-gpu==1.15.2
-keras==2.0.8
-profilehooks
-numpy
-pyperclip
-h5py
+# PyTorch port (2026) -- see readme.md "Встановлення" for the GPU nuance:
+# older cards (compute capability < 7.5, e.g. GTX 1050 Ti) need
+# `pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu126`
+# instead of the plain pin below, or the CUDA calls silently fail.
+torch==2.13.0
+numpy==2.5.2
+h5py==3.16.0
+python-chess==1.11.2

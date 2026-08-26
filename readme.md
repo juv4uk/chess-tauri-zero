@@ -250,6 +250,12 @@ If you want to train the model from the beginning, delete the above directories.
 How to use
 ==========
 
+> **2026 PyTorch port note:** `requirements.txt` now pins the PyTorch
+> stack (see "Встановлення" at the top of this file), not the original
+> tensorflow-gpu/keras below -- this section is preserved as-is for
+> historical/upstream provenance, but following it literally today
+> installs torch, not TensorFlow.
+
 Setup
 -------
 ### install libraries
