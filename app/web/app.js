@@ -24,6 +24,7 @@ const trainBtn = document.getElementById("btn-train");
 const reloadBtn = document.getElementById("btn-reload");
 const historyBtn = document.getElementById("btn-history");
 const historyTableEl = document.getElementById("history-table");
+const resetModelBtn = document.getElementById("btn-reset-model");
 
 const game = new Chess();
 const moveHistory = []; // UCI strings, sent to the engine as "position startpos moves ..."
@@ -332,6 +333,7 @@ function updateControlsEnabled() {
   trainBtn.disabled = busy;
   reloadBtn.disabled = busy;
   historyBtn.disabled = busy;
+  resetModelBtn.disabled = busy;
   colorButtons.forEach((b) => (b.disabled = busy));
   difficultyButtons.forEach((b) => {
     b.disabled = busy;
@@ -591,6 +593,43 @@ function renderHistory(entries) {
   historyTableEl.innerHTML = `<tr><th>Цикл</th><th>Win-rate</th><th>Статус</th><th>Коли</th></tr>${rows}`;
 }
 
+// "Справжній нуль" (owner's explicit choice over resetting to the h5
+// baseline): discards ALL training progress and starts from a fresh,
+// randomly-initialized model -- the pure AlphaZero zero-knowledge
+// principle applied to the whole lineage, not just the self-play loop
+// on top of it. Genuinely destructive and irreversible (the backend
+// also wipes the entire generation journal, since old records are
+// meaningless against a new baseline) -- confirmed with the user
+// before sending anything.
+async function resetModelToScratch() {
+  if (mode !== "idle") return;
+  const confirmed = window.confirm(
+    "Це видалить усю історію тренувань (журнал поколінь) і почне з випадкових, ненавчених ваг -- справжній нуль AlphaZero, без базової моделі. Це НЕЗВОРОТНЬО. Продовжити?"
+  );
+  if (!confirmed) return;
+
+  mode = "train"; // reuse the same busy-gate as reload/history for this one round-trip
+  updateControlsEnabled();
+  setStatus("Скидаю модель до випадкових ваг...");
+  try {
+    await reliableSend("resetmodel");
+    const line = await waitForLine((l) => l.startsWith("resetmodelresult "));
+    const result = line.slice("resetmodelresult ".length);
+    if (result === "ok") {
+      setStatus("Модель скинута до випадкових ваг. Журнал поколінь очищено.");
+      renderHistory([]);
+    } else {
+      setStatus(`Не вдалося скинути модель: ${result}`);
+    }
+  } catch (err) {
+    setStatus(`Помилка скидання моделі: ${err}`);
+  } finally {
+    mode = "idle";
+    heatmap = {};
+    updateControlsEnabled();
+  }
+}
+
 // Escape: stop whatever is running. selfplay has a real graceful stop
 // (`selfplay stop`, already used by the button); "thinking" (waiting
 // on `go`) and "train" have no interrupt point in the Python code at
@@ -663,6 +702,7 @@ selfplayBtn.addEventListener("click", toggleSelfplay);
 trainBtn.addEventListener("click", startTraining);
 reloadBtn.addEventListener("click", reloadModel);
 historyBtn.addEventListener("click", showHistory);
+resetModelBtn.addEventListener("click", resetModelToScratch);
 
 async function init() {
   render();

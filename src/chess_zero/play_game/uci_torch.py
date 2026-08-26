@@ -14,6 +14,7 @@ wrapper that runs `python3 uci_torch.py`):
 """
 import chess
 import os
+import shutil
 import sys
 import threading
 import time
@@ -23,11 +24,13 @@ sys.path.insert(0, ".")
 from chess_zero.agent.load_weights import load_torch_model
 from chess_zero.agent.player_chess_torch import TorchChessPlayer, PlayConfig
 from chess_zero.agent.batched_predictor import BatchedPredictor
+from chess_zero.agent.torch_model import ChessResNet
 from chess_zero.env.chess_env import ChessEnv
 from chess_zero.lib.data_helper_torch import write_game_data_to_file
+from chess_zero.worker.optimize_torch import save_checkpoint
 import json
 
-from chess_zero.worker.pipeline_torch import run_cycle, model_history
+from chess_zero.worker.pipeline_torch import run_cycle, model_history, BEST_MODEL_PATH, NEXT_GEN_DIR
 
 
 def human_play_config() -> PlayConfig:
@@ -189,6 +192,51 @@ def reload_models(*models):
         device = next(model.parameters()).device
         model.load_state_dict(torch.load(ckpt, map_location=device))
     return True
+
+
+def reset_model_to_scratch():
+    """"Справжній нуль" -- owner's explicit choice over the alternative
+    of resetting to the shipped h5 baseline: a freshly, randomly
+    initialized ChessResNet, no supervised-learning h5 weights loaded
+    at all. Applies AlphaZero's zero-external-knowledge principle to
+    the WHOLE lineage, not just the self-play loop on top of it --
+    readme.md's own honest note is that model_best_weight.h5 itself
+    came from 2017-era supervised learning on ~10k human games, which
+    this bypasses entirely.
+
+    Genuinely destructive, by design: also clears the ENTIRE
+    generation journal (NEXT_GEN_DIR), since every existing record's
+    win_rate/parent chain was measured against the OLD baseline and
+    would be actively misleading plotted against a fresh one -- a
+    "cycle 12: 61%" from the old lineage means nothing once the
+    baseline itself has changed underneath it.
+
+    Caller (`resetmodel` UCI command) is responsible for refusing this
+    while selfplay/train is running -- mutating _shared_model/
+    me_player.model out from under a live search or training thread
+    would be exactly the kind of unsynchronized-tensor-write race an
+    earlier fix this session (_me_player_lock) closed for promotion;
+    this function itself only takes that lock for the brief, already-
+    serialized case of a `go` running concurrently, not for
+    selfplay/train (structurally prevented by the caller instead,
+    matching fix #7's own selfplay/train mutual exclusion)."""
+    fresh = ChessResNet()
+    fresh.eval()
+    fresh_state = fresh.state_dict()
+
+    global _shared_model
+    with _shared_model_lock:
+        if _shared_model is None:
+            _shared_model = fresh
+        else:
+            _shared_model.load_state_dict(fresh_state)
+    with _me_player_lock:
+        if me_player is not None:
+            me_player.model.load_state_dict(fresh_state)
+
+    save_checkpoint(fresh, BEST_MODEL_PATH)
+    if os.path.isdir(NEXT_GEN_DIR):
+        shutil.rmtree(NEXT_GEN_DIR)
 
 
 # --- selfplay: two TorchChessPlayers sharing one model/predictor play
@@ -494,6 +542,20 @@ def _dispatch(words, env):
                 else:
                     _train_thread = threading.Thread(target=_train_worker, daemon=True)
                     _train_thread.start()
+    elif words[0] == "resetmodel":
+        # "Справжній нуль": discard all training progress, start from
+        # a fresh random-weight model. Refused while selfplay/train is
+        # live -- mirrors that fix's own mutual-exclusion pattern,
+        # since mutating shared model weights mid-search/mid-training
+        # would be exactly the race that fix closed for promotion.
+        if _train_thread is not None and _train_thread.is_alive():
+            print("resetmodelresult error training running")
+        elif _selfplay_thread is not None and _selfplay_thread.is_alive():
+            print("resetmodelresult error selfplay running")
+        else:
+            reset_model_to_scratch()
+            print("resetmodelresult ok")
+        sys.stdout.flush()
     elif words[0] == "humanmove":
         # "humanmove <fen-before-move, 6 space-separated fields> <uci
         # move>" -- fen comes from the frontend's own chess.js state,
