@@ -33,12 +33,21 @@ PLAY_DATA_DIR = "../data/play_data_torch"
 
 
 def run_cycle(best_model, device, games_per_cycle=2, sims_per_move=30, max_halfmoves=16,
-              train_epochs_n=1, eval_games=2, cycle_idx=0, on_progress=None):
+              train_epochs_n=1, eval_games=2, on_progress=None):
     """on_progress: optional callable(stage: str) -- called at the start
     of each phase ("selfplay"/"train"/"evaluate") so a caller (e.g. the
     UCI sidecar's `train start` command) can stream progress over a
     line-based protocol instead of only seeing this function's own
-    print() output."""
+    print() output.
+
+    cycle_idx is no longer a caller-supplied parameter -- every real
+    caller (the UCI `train start`/background-training path, and this
+    module's own __main__) either passed a constant 0 or restarted
+    from 0 on every fresh process, which silently overwrote the SAME
+    model_cycle0.pt/.json on every run (a real bug: only the very last
+    cycle's record ever survived, promoted or not). _next_attempt_number()
+    now derives a real monotonic id from what's already on disk instead."""
+    cycle_idx = _next_attempt_number()
     if on_progress:
         on_progress("selfplay")
     print(f"\n=== Cycle {cycle_idx}: self-play ({games_per_cycle} games) ===")
@@ -65,11 +74,11 @@ def run_cycle(best_model, device, games_per_cycle=2, sims_per_move=30, max_halfm
     win_rate, promote = evaluate_candidate(candidate_model, best_model, game_num=eval_games, max_halfmoves=max_halfmoves)
     print(f"evaluation done in {time.time()-t0:.1f}s: win_rate={win_rate*100:.1f}%, promote={promote}")
 
+    record_cycle_result(cycle_idx, win_rate, promote)
     if promote:
         gen_path = os.path.join(NEXT_GEN_DIR, f"model_cycle{cycle_idx}.pt")
         save_checkpoint(candidate_model, gen_path)
         save_checkpoint(candidate_model, BEST_MODEL_PATH)
-        record_promotion(cycle_idx, win_rate)
         print(f"PROMOTED: candidate saved to {gen_path} and {BEST_MODEL_PATH}")
         return candidate_model
     else:
@@ -77,18 +86,37 @@ def run_cycle(best_model, device, games_per_cycle=2, sims_per_move=30, max_halfm
         return best_model
 
 
-def record_promotion(cycle_idx, win_rate):
-    """Writes model_cycle{N}.json next to the checkpoint run_cycle just
-    saved -- P0 "generation journal + quality curve" from
-    docs/development-plan-uk.md: run_cycle already computed win_rate,
-    it just never used to be saved anywhere but a print() line. One
-    record covers both the journal (which cycle got promoted, when)
-    and the quality curve (win_rate over cycles)."""
+def _next_attempt_number():
+    """One higher than the highest cycle id already recorded in
+    NEXT_GEN_DIR (0 if the directory doesn't exist yet, or has no
+    records) -- gives every run_cycle() call, across process restarts,
+    a unique id instead of every caller re-using the same constant."""
+    if not os.path.isdir(NEXT_GEN_DIR):
+        return 0
+    existing = []
+    for path in glob.glob(os.path.join(NEXT_GEN_DIR, "model_cycle*.json")):
+        name = os.path.basename(path)[len("model_cycle"):-len(".json")]
+        if name.isdigit():
+            existing.append(int(name))
+    return (max(existing) + 1) if existing else 0
+
+
+def record_cycle_result(cycle_idx, win_rate, promoted):
+    """Writes model_cycle{N}.json for EVERY cycle's evaluation result,
+    promoted or not -- P0 "generation journal + quality curve" from
+    docs/development-plan-uk.md originally only recorded promotions,
+    which silently discarded every rejected candidate's result (real
+    gap: no way to tell "never tried" from "tried and rejected", and
+    no data for a future lineage view). Rejected candidates' WEIGHTS
+    still aren't kept (that candidate_model is discarded when run_cycle
+    returns best_model unchanged) -- only the small win_rate/promoted
+    record, which is what "history" actually needs to show."""
     os.makedirs(NEXT_GEN_DIR, exist_ok=True)
     record = {
         "cycle": cycle_idx,
         "win_rate": win_rate,
-        "promoted_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "promoted": promoted,
+        "evaluated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     record_path = os.path.join(NEXT_GEN_DIR, f"model_cycle{cycle_idx}.json")
     with open(record_path, "w") as f:
@@ -96,11 +124,11 @@ def record_promotion(cycle_idx, win_rate):
 
 
 def model_history():
-    """Every promotion record found in NEXT_GEN_DIR, sorted by cycle
-    number. NEXT_GEN_DIR itself may not exist at all yet -- os.makedirs
-    is lazy, it's only created on the first real promotion (confirmed
-    by the Critic phase of the Disney-method analysis) -- so a missing
-    directory is treated as "no history yet", not an error."""
+    """Every cycle's evaluation record found in NEXT_GEN_DIR (promoted
+    and rejected alike), sorted by cycle number. NEXT_GEN_DIR itself
+    may not exist at all yet -- os.makedirs is lazy, it's only created
+    on the first recorded cycle -- so a missing directory is treated
+    as "no history yet", not an error."""
     if not os.path.isdir(NEXT_GEN_DIR):
         return []
     records = []
@@ -127,6 +155,6 @@ if __name__ == "__main__":
 
     num_cycles = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     for c in range(num_cycles):
-        best_model = run_cycle(best_model, device, cycle_idx=c)
+        best_model = run_cycle(best_model, device)
 
     print("\nPipeline run complete.")

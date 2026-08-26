@@ -391,9 +391,10 @@ async function reloadModel() {
   }
 }
 
-// P0 "generation journal + quality curve": lists every promoted
-// checkpoint the backend recorded (see pipeline_torch.record_promotion),
-// oldest first, one round-trip via the `history` UCI command.
+// P0 "generation journal + quality curve": lists every evaluated cycle
+// the backend recorded, promoted or rejected (see
+// pipeline_torch.record_cycle_result), oldest first, one round-trip
+// via the `history` UCI command.
 async function showHistory() {
   if (mode !== "idle") return;
   mode = "train"; // reuse the same busy-gate as training/reload for this one round-trip
@@ -411,10 +412,11 @@ async function showHistory() {
       }
     );
     renderHistory(entries);
+    const promotedCount = entries.filter((e) => e.promoted).length;
     setStatus(
       entries.length
-        ? `Історія: ${entries.length} промоушн(и/ів).`
-        : "Історія порожня -- ще жодна модель не промоутилась."
+        ? `Історія: ${entries.length} цикл(и/ів), з них промоутнуто ${promotedCount}.`
+        : "Історія порожня -- жодного циклу тренування ще не було."
     );
   } catch (err) {
     setStatus(`Помилка читання історії: ${err}`);
@@ -432,10 +434,10 @@ function renderHistory(entries) {
   const rows = entries
     .map(
       (e) =>
-        `<tr><td>${e.cycle}</td><td>${(e.win_rate * 100).toFixed(1)}%</td><td>${new Date(e.promoted_at).toLocaleString()}</td></tr>`
+        `<tr><td>${e.cycle}</td><td>${(e.win_rate * 100).toFixed(1)}%</td><td>${e.promoted ? "✓ промоутнуто" : "відхилено"}</td><td>${new Date(e.evaluated_at).toLocaleString()}</td></tr>`
     )
     .join("");
-  historyTableEl.innerHTML = `<tr><th>Цикл</th><th>Win-rate</th><th>Коли</th></tr>${rows}`;
+  historyTableEl.innerHTML = `<tr><th>Цикл</th><th>Win-rate</th><th>Статус</th><th>Коли</th></tr>${rows}`;
 }
 
 colorButtons.forEach((b) =>
