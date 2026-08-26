@@ -30,7 +30,7 @@ from chess_zero.lib.data_helper_torch import write_game_data_to_file
 from chess_zero.worker.optimize_torch import save_checkpoint
 import json
 
-from chess_zero.worker.pipeline_torch import run_cycle, model_history, BEST_MODEL_PATH, NEXT_GEN_DIR
+from chess_zero.worker.pipeline_torch import run_cycle, model_history, BEST_MODEL_PATH, NEXT_GEN_DIR, PLAY_DATA_DIR
 
 
 def human_play_config() -> PlayConfig:
@@ -204,12 +204,31 @@ def reset_model_to_scratch():
     came from 2017-era supervised learning on ~10k human games, which
     this bypasses entirely.
 
-    Genuinely destructive, by design: also clears the ENTIRE
-    generation journal (NEXT_GEN_DIR), since every existing record's
-    win_rate/parent chain was measured against the OLD baseline and
-    would be actively misleading plotted against a fresh one -- a
-    "cycle 12: 61%" from the old lineage means nothing once the
-    baseline itself has changed underneath it.
+    Genuinely destructive, by design: also archives (renames aside,
+    does not delete outright) the ENTIRE generation journal
+    (NEXT_GEN_DIR) AND the self-play corpus (PLAY_DATA_DIR), since
+    every existing record's win_rate/parent chain -- and every
+    existing self-play GAME -- was generated against the OLD baseline
+    and would silently contaminate a fresh lineage otherwise.
+
+    Real P0 bug found by an external audit and independently verified
+    against this exact source before fixing: this function used to
+    clear NEXT_GEN_DIR but leave PLAY_DATA_DIR (data/play_data_torch/)
+    completely untouched. run_cycle() reads EVERY file in that one,
+    fixed directory for training regardless of which model lineage
+    generated them (pipeline_torch.PLAY_DATA_DIR is a single global
+    path, not lineage-scoped) -- so the very first `train start` after
+    a "справжній нуль" reset would silently train the brand-new random
+    model on self-play games the OLD, now-discarded baseline
+    generated. The UI's own confirmation text and the whole point of
+    this feature ("no supervised-learning baseline, no external
+    knowledge") would have been false the moment old self-play data
+    leaked into the new lineage's first cycle.
+
+    Archived (not deleted) so an accidental reset doesn't destroy
+    provenance -- model_history()/self_play_loop only ever look at
+    the live NEXT_GEN_DIR/PLAY_DATA_DIR paths, so an archived sibling
+    directory is invisible to the app but still recoverable by hand.
 
     Caller (`resetmodel` UCI command) is responsible for refusing this
     while selfplay/train is running -- mutating _shared_model/
@@ -235,8 +254,11 @@ def reset_model_to_scratch():
             me_player.model.load_state_dict(fresh_state)
 
     save_checkpoint(fresh, BEST_MODEL_PATH)
-    if os.path.isdir(NEXT_GEN_DIR):
-        shutil.rmtree(NEXT_GEN_DIR)
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    for lineage_dir in (NEXT_GEN_DIR, PLAY_DATA_DIR):
+        if os.path.isdir(lineage_dir):
+            shutil.move(lineage_dir, f"{lineage_dir}.archived-{timestamp}")
 
 
 # --- selfplay: two TorchChessPlayers sharing one model/predictor play

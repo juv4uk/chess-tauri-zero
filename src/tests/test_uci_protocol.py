@@ -17,6 +17,7 @@ were hit live.
 Usage (from src/, inside the venv):
     python3 -m unittest discover -s tests -p "test_*.py" -v
 """
+import glob
 import json
 import os
 import shutil
@@ -129,12 +130,42 @@ class ModelStateBackupMixin:
             os.remove(self._backup_path)
 
 
-class TestHistoryAndReset(UciTorchTestCase, ModelStateBackupMixin):
+class PlayDataBackupMixin:
+    """Moves data/play_data_torch/ aside before a destructive test and
+    restores it after -- independent of whatever archiving resetmodel
+    itself does internally (a play_data_torch.archived-* sibling), so
+    multiple resetmodel-calling tests in the same class can't leave
+    each other's cleanup half-done. A no-op backup (None) on a fresh
+    CI checkout where the directory doesn't exist yet."""
+
+    PLAY_DATA_DIR = "../data/play_data_torch"
+
+    def backup_play_data(self):
+        self._play_data_backup = None
+        if os.path.isdir(self.PLAY_DATA_DIR):
+            self._play_data_backup = self.PLAY_DATA_DIR + ".test-backup"
+            shutil.move(self.PLAY_DATA_DIR, self._play_data_backup)
+
+    def restore_play_data(self):
+        # Whatever the test run left behind (a fresh play_data_torch/
+        # a test created, or a play_data_torch.archived-* resetmodel
+        # produced) is a test artifact, not real data -- discard it
+        # before restoring the real backup, if there was one.
+        for stray in glob.glob(self.PLAY_DATA_DIR + "*"):
+            if stray != self._play_data_backup and os.path.isdir(stray):
+                shutil.rmtree(stray)
+        if self._play_data_backup:
+            shutil.move(self._play_data_backup, self.PLAY_DATA_DIR)
+
+
+class TestHistoryAndReset(UciTorchTestCase, ModelStateBackupMixin, PlayDataBackupMixin):
     def setUp(self):
         super().setUp()
         self.backup_model()
+        self.backup_play_data()
 
     def tearDown(self):
+        self.restore_play_data()
         self.restore_model()
         super().tearDown()
 
@@ -150,6 +181,32 @@ class TestHistoryAndReset(UciTorchTestCase, ModelStateBackupMixin):
         self.engine.send("position startpos")
         self.engine.send("go")
         self.engine.expect(lambda l: l.startswith("bestmove "))
+
+    def test_resetmodel_archives_old_selfplay_corpus_instead_of_leaving_it_active(self):
+        # Regression test for BH-02, a real P0 bug found by an
+        # external audit (2026-08-26) and independently verified: this
+        # used to clear the generation journal but leave
+        # data/play_data_torch/ completely untouched -- the NEXT
+        # `train start` would silently train a brand-new "справжній
+        # нуль" model on self-play games the OLD, discarded baseline
+        # generated, contradicting the whole point of the reset.
+        os.makedirs(self.PLAY_DATA_DIR, exist_ok=True)
+        marker_path = os.path.join(self.PLAY_DATA_DIR, "play_test-marker.json")
+        with open(marker_path, "w") as f:
+            json.dump([["fen", [0.0], 0.0]], f)
+
+        self.engine.send("resetmodel")
+        result = self.engine.expect(lambda l: l.startswith("resetmodelresult"))
+        self.assertEqual(result, "resetmodelresult ok")
+
+        self.assertFalse(
+            os.path.isdir(self.PLAY_DATA_DIR),
+            "old self-play corpus must not remain active after resetmodel",
+        )
+        archives = glob.glob(self.PLAY_DATA_DIR + ".archived-*")
+        self.assertEqual(len(archives), 1, "expected exactly one archive directory")
+        archived_marker = os.path.join(archives[0], "play_test-marker.json")
+        self.assertTrue(os.path.exists(archived_marker), "marker file must survive inside the archive")
 
 
 class TestSelfplayTrainMutualExclusion(UciTorchTestCase):
