@@ -459,8 +459,8 @@ async function startTraining() {
   setStatus("Тренування...");
   setBackgroundJob("train", "Тренування...");
 
-  await reliableSend("train start");
   try {
+    await reliableSend("train start");
     const resultLine = await pollUntil(
       (line) =>
         line.startsWith("trainresult ") || line.startsWith("trainerror "),
