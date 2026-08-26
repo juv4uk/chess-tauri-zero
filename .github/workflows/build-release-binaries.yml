@@ -101,16 +101,21 @@ jobs:
           name: windows-binary
           path: dl-windows
 
-      - name: Place binaries into release/
-        run: |
-          cp dl-linux/chess-tauri-zero-app release/chess-tauri-zero-current-linux-x86_64
-          chmod +x release/chess-tauri-zero-current-linux-x86_64
-          cp dl-windows/chess-tauri-zero-app.exe release/chess-tauri-zero-current-windows-x86_64.exe
-
       - name: Commit and push if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # master can have moved since this job's own checkout (build-linux
+          # + build-windows take several minutes) -- real failure seen on the
+          # first run: "non-fast-forward" push rejection because a human
+          # push landed on master while this job was still building.
+          # release/*.exe/binary aren't tracked by anything else, so a
+          # fetch+reset right before committing is safe.
+          git fetch origin master
+          git reset --hard origin/master
+          cp dl-linux/chess-tauri-zero-app release/chess-tauri-zero-current-linux-x86_64
+          chmod +x release/chess-tauri-zero-current-linux-x86_64
+          cp dl-windows/chess-tauri-zero-app.exe release/chess-tauri-zero-current-windows-x86_64.exe
           git add release/chess-tauri-zero-current-linux-x86_64 release/chess-tauri-zero-current-windows-x86_64.exe
           if git diff --cached --quiet; then
             echo "Binaries unchanged, nothing to commit."
