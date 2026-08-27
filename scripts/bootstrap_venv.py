@@ -1,11 +1,18 @@
 """Cross-platform one-shot venv bootstrap: creates .venv next to the
 repo root if it's missing, installs the Python dependencies (auto-
-picking the cu126 torch build on older NVIDIA GPUs -- compute
+picking the cu118 torch build on older NVIDIA GPUs -- compute
 capability < 7.5, e.g. the GTX 1050 Ti this project has actually been
 developed and tested against on two separate real machines this
 session, where the plain torch pin reports CUDA "available" but can't
 really use the GPU), and does nothing (fast, idempotent) if the venv
 already has everything it needs.
+
+cu118, not the newer cu126, because that's the CUDA toolkit the owner
+has installed on both his real machines (Linux dev box + Windows) as
+of 2026-08-27 -- torch has no cu118 build newer than 2.7.1, hence that
+older pin below too (cu126 itself would also satisfy the compute-
+capability requirement; cu118 was picked to match installed toolkits,
+not because cu126 stopped working).
 
 Called by release/run-linux.sh and release/run-windows.bat before
 launching the app, so a fresh clone can go from "just cloned" to "app
@@ -33,7 +40,7 @@ def venv_has_torch():
     return result.returncode == 0
 
 
-def needs_cu126():
+def needs_cu118():
     """True if an NVIDIA GPU with compute capability < 7.5 is visible.
     No nvidia-smi (no GPU, or AMD/Intel/CPU-only) -> False, plain
     requirements.txt is the right, safe default there."""
@@ -65,11 +72,11 @@ def main():
         return
 
     print("Встановлюю Python-залежності (перший запуск -- torch може зайняти кілька хвилин)...")
-    if needs_cu126():
-        print("Виявлено GPU зі старішою compute capability (<7.5) -- ставлю torch з cu126-індексу для сумісності.")
+    if needs_cu118():
+        print("Виявлено GPU зі старішою compute capability (<7.5) -- ставлю torch з cu118-індексу для сумісності.")
         subprocess.run(
             [VENV_PYTHON, "-m", "pip", "install", "-q",
-             "torch==2.13.0", "--index-url", "https://download.pytorch.org/whl/cu126"],
+             "torch==2.7.1", "--index-url", "https://download.pytorch.org/whl/cu118"],
             check=True,
         )
         subprocess.run(
