@@ -1,18 +1,25 @@
 """Cross-platform one-shot venv bootstrap: creates .venv next to the
 repo root if it's missing, installs the Python dependencies (auto-
-picking the cu118 torch build on older NVIDIA GPUs -- compute
+picking a compatible torch build on older NVIDIA GPUs -- compute
 capability < 7.5, e.g. the GTX 1050 Ti this project has actually been
 developed and tested against on two separate real machines this
 session, where the plain torch pin reports CUDA "available" but can't
 really use the GPU), and does nothing (fast, idempotent) if the venv
 already has everything it needs.
 
-cu118, not the newer cu126, because that's the CUDA toolkit the owner
-has installed on both his real machines (Linux dev box + Windows) as
-of 2026-08-27 -- torch has no cu118 build newer than 2.7.1, hence that
-older pin below too (cu126 itself would also satisfy the compute-
-capability requirement; cu118 was picked to match installed toolkits,
-not because cu126 stopped working).
+The pin now differs by OS, since the owner's two real machines have
+diverged (2026-08-27, "переходим на 12,1 я вже в всл встановив, а в
+віндовсі не має потреби"): Windows keeps CUDA 11.8 -> torch==2.7.1
++cu118 (torch has no cu118 build newer than 2.7.1). Linux/WSL moved to
+CUDA 12.1 -> torch==2.8.0+cu126 -- cu126, not cu121, because the cu121
+wheel index tops out at torch 2.5.1 (a real downgrade from what was
+already running), while cu126 still ships working Pascal/sm_61 kernels
+at 2.8.0 (empirically confirmed live on this machine: real GPU matmul
+succeeds, though torch.cuda.get_arch_list() lists sm_60, not sm_61
+literally -- sm_61 runs via same-major forward compatibility with the
+sm_60 kernel, not a listed exact match). The wheel's bundled CUDA
+runtime does not need to match the installed toolkit version to run
+torch itself -- only building native CUDA extensions with nvcc would.
 
 Called by release/run-linux.sh and release/run-windows.bat before
 launching the app, so a fresh clone can go from "just cloned" to "app
@@ -40,7 +47,7 @@ def venv_has_torch():
     return result.returncode == 0
 
 
-def needs_cu118():
+def needs_old_gpu_pin():
     """True if an NVIDIA GPU with compute capability < 7.5 is visible.
     No nvidia-smi (no GPU, or AMD/Intel/CPU-only) -> False, plain
     requirements.txt is the right, safe default there."""
@@ -72,11 +79,15 @@ def main():
         return
 
     print("Встановлюю Python-залежності (перший запуск -- torch може зайняти кілька хвилин)...")
-    if needs_cu118():
-        print("Виявлено GPU зі старішою compute capability (<7.5) -- ставлю torch з cu118-індексу для сумісності.")
+    if needs_old_gpu_pin():
+        if os.name == "nt":
+            torch_pin, index_url = "torch==2.7.1", "https://download.pytorch.org/whl/cu118"
+            print("Виявлено GPU зі старішою compute capability (<7.5) на Windows -- ставлю torch з cu118-індексу (CUDA 11.8 toolkit) для сумісності.")
+        else:
+            torch_pin, index_url = "torch==2.8.0", "https://download.pytorch.org/whl/cu126"
+            print("Виявлено GPU зі старішою compute capability (<7.5) на Linux/WSL -- ставлю torch з cu126-індексу (CUDA 12.1 toolkit) для сумісності.")
         subprocess.run(
-            [VENV_PYTHON, "-m", "pip", "install", "-q",
-             "torch==2.7.1", "--index-url", "https://download.pytorch.org/whl/cu118"],
+            [VENV_PYTHON, "-m", "pip", "install", "-q", torch_pin, "--index-url", index_url],
             check=True,
         )
         subprocess.run(

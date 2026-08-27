@@ -148,10 +148,14 @@ pip install h5py numpy chess
 # GPU: якщо карта старша (compute capability < 7.5, напр. GTX 1050 Ti / sm_61) --
 # звичайний "pip install torch" ставить збірку без ядер під таку архітектуру
 # (тиха помилка CUBLAS_STATUS_ARCH_MISMATCH при першому реальному виклику).
-# Потрібна саме cu118-збірка (власник тримає CUDA 11.8 і на Linux, і на
-# Windows -- новішого cu126 тут свідомо уникаємо, torch не має cu118-збірки
-# новішої за 2.7.1, звідси й цей пін):
+# Windows (CUDA 11.8 toolkit) -- torch не має cu118-збірки новішої за 2.7.1:
 pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118
+
+# Linux/WSL (CUDA 12.1 toolkit) -- cu126, не cu121: cu121-індекс дає лише
+# до torch 2.5.1, а cu126 і на 2.8.0 ще працює на sm_61 (перевірено живим
+# GPU matmul; toolkit і wheel-runtime не мусять збігатись версіями для
+# звичайного запуску torch):
+pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu126
 
 # Або без GPU (повільніше, але коректно):
 pip install torch==2.7.1
@@ -247,8 +251,9 @@ hot-reload натренованої моделі — прямо з інтерф�
 **Ручне налаштування `.venv` більше не потрібне** — скрипт сам
 створює `.venv` і ставить залежності при першому запуску (з
 автовизначенням старших NVIDIA GPU — compute capability < 7.5,
-наприклад GTX 1050 Ti — і вибором правильної `cu118`-збірки torch).
-Другий і наступні запуски швидкі, `.venv` вже готовий.
+наприклад GTX 1050 Ti — і вибором правильної збірки torch: `cu118`
+на Windows, `cu126` на Linux/WSL). Другий і наступні запуски швидкі,
+`.venv` вже готовий.
 
 `start.sh`/`start.bat` — просто тонкі обгортки над
 [`release/run-linux.sh`](release/run-linux.sh)/

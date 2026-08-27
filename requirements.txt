@@ -1,10 +1,11 @@
 # PyTorch port (2026) -- see readme.md "Встановлення" for the GPU nuance:
-# older cards (compute capability < 7.5, e.g. GTX 1050 Ti) need
-# `pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118`
-# instead of the plain pin below, or the CUDA calls silently fail. cu118
-# (not the newer cu126) because that's the CUDA toolkit the owner has
-# installed on both his dev machines (Linux + Windows) as of 2026-08-27
-# -- torch has no cu118 build past 2.7.1, hence this older pin too.
+# older cards (compute capability < 7.5, e.g. GTX 1050 Ti) need a
+# CUDA-specific index instead of the plain pin below, or the CUDA calls
+# silently fail: `torch==2.7.1 --index-url .../cu118` on Windows (CUDA
+# 11.8 toolkit there), `torch==2.8.0 --index-url .../cu126` on Linux/WSL
+# (CUDA 12.1 toolkit there, as of 2026-08-27 -- cu121's own index tops
+# out at torch 2.5.1, a real downgrade, while cu126 still runs on sm_61
+# at 2.8.0, confirmed live).
 torch==2.7.1
 numpy==2.5.2
 h5py==3.16.0
