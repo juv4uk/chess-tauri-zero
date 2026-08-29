@@ -1,12 +1,18 @@
-# PyTorch port (2026) -- see readme.md "Встановлення" for the GPU nuance:
-# older cards (compute capability < 7.5, e.g. GTX 1050 Ti) need a
-# CUDA-specific index instead of the plain pin below, or the CUDA calls
-# silently fail: `torch==2.7.1 --index-url .../cu118` on Windows (CUDA
-# 11.8 toolkit there), `torch==2.8.0 --index-url .../cu126` on Linux/WSL
-# (CUDA 12.1 toolkit there, as of 2026-08-27 -- cu121's own index tops
-# out at torch 2.5.1, a real downgrade, while cu126 still runs on sm_61
-# at 2.8.0, confirmed live).
-torch==2.7.1
+# Verified owner GPU matrix (GTX 1050 Ti / Pascal sm_61):
+#   Linux/WSL: PyTorch 2.8.0 + cu126
+#   Windows:   PyTorch 2.7.1 + cu118
+# Local-version pins make pip select the intended wheel instead of silently
+# falling back to a plain or newer CUDA build.  Linux CUDA runtime components
+# are explicit because installing cuDNN alone otherwise resolves the newest
+# cu12 cuBLAS/NVRTC and breaks torch's exact dependency contract.
+--extra-index-url https://download.pytorch.org/whl/cu126
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+torch==2.8.0+cu126; sys_platform == "linux"
+torch==2.7.1+cu118; sys_platform == "win32"
+nvidia-cudnn-cu12==9.10.2.21; sys_platform == "linux"
+nvidia-cublas-cu12==12.6.4.1; sys_platform == "linux"
+nvidia-cuda-nvrtc-cu12==12.6.77; sys_platform == "linux"
 numpy==2.5.2
 h5py==3.16.0
 chess==1.11.2

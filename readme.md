@@ -151,7 +151,7 @@ pip install h5py numpy chess
 # Windows (CUDA 11.8 toolkit) -- torch не має cu118-збірки новішої за 2.7.1:
 pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118
 
-# Linux/WSL (CUDA 12.1 toolkit) -- cu126, не cu121: cu121-індекс дає лише
+# Linux/WSL (CUDA 12.6 toolkit) -- cu126, не cu121: cu121-індекс дає лише
 # до torch 2.5.1, а cu126 і на 2.8.0 ще працює на sm_61 (перевірено живим
 # GPU matmul; toolkit і wheel-runtime не мусять збігатись версіями для
 # звичайного запуску torch):

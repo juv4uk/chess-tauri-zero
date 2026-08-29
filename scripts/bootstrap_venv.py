@@ -7,11 +7,10 @@ session, where the plain torch pin reports CUDA "available" but can't
 really use the GPU), and does nothing (fast, idempotent) if the venv
 already has everything it needs.
 
-The pin now differs by OS, since the owner's two real machines have
-diverged (2026-08-27, "переходим на 12,1 я вже в всл встановив, а в
-віндовсі не має потреби"): Windows keeps CUDA 11.8 -> torch==2.7.1
+The pin differs by OS because the owner's two real machines use different
+toolkits: Windows keeps CUDA 11.8 -> torch==2.7.1
 +cu118 (torch has no cu118 build newer than 2.7.1). Linux/WSL moved to
-CUDA 12.1 -> torch==2.8.0+cu126 -- cu126, not cu121, because the cu121
+CUDA 12.6 -> torch==2.8.0+cu126 -- cu126, not cu121, because the cu121
 wheel index tops out at torch 2.5.1 (a real downgrade from what was
 already running), while cu126 still ships working Pascal/sm_61 kernels
 at 2.8.0 (empirically confirmed live on this machine: real GPU matmul
@@ -85,7 +84,7 @@ def main():
             print("Виявлено GPU зі старішою compute capability (<7.5) на Windows -- ставлю torch з cu118-індексу (CUDA 11.8 toolkit) для сумісності.")
         else:
             torch_pin, index_url = "torch==2.8.0", "https://download.pytorch.org/whl/cu126"
-            print("Виявлено GPU зі старішою compute capability (<7.5) на Linux/WSL -- ставлю torch з cu126-індексу (CUDA 12.1 toolkit) для сумісності.")
+            print("Виявлено GPU зі старішою compute capability (<7.5) на Linux/WSL -- ставлю torch з cu126-індексу (CUDA 12.6 toolkit) для сумісності.")
         subprocess.run(
             [VENV_PYTHON, "-m", "pip", "install", "-q", torch_pin, "--index-url", index_url],
             check=True,
