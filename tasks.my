@@ -1,0 +1,12 @@
+; tasks.my — durable task plan for chess-tauri-zero (PyTorch port of a
+; fork of kmader/chess-alpha-zero).
+
+((tasks . (
+  ("CHESS-TAURI-ZERO-CLARIFY-RELATIONSHIP-TO-CHESS-LISP-ZERO" . (
+    (priority . 4.5)
+    (capabilities . (documentation chess-domain))
+    (origin . chess-tauri-zero)
+    (description . "chess-lisp-zero (repo.my authority=chess-domain, language-authority=my-lisp) is the ecosystem's own chess-engine research line. This repo is a separately-sourced PyTorch port of a third-party chess-alpha-zero fork (Binder links to kmader/chess-alpha-zero in its own readme.md) with no repo.my and no stated relationship to chess-lisp-zero. Clarify: is this a reference/comparison baseline for chess-lisp-zero's own perft/search work, an independent experiment, or historical/superseded -- and document upstream attribution/license, which is currently unstated here.")
+    (done . ())
+  ))
+)))
