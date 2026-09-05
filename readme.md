@@ -511,3 +511,7 @@ self.vram_frac = 1.0
 
 Smaller batch_size will reduce memory usage of `opt`.
 Try to change `TrainerConfig#batch_size` in `MiniConfig`.
+
+## Ліцензія
+
+Цей твір поширюється під [ВОЛЬНІСТЮ](LICENSE) — простим словом про свободу творити, пам'ятаючи про волю іншого.
