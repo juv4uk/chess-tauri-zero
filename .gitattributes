@@ -1,0 +1,6 @@
+# GitHub Linguist does not know my-lisp or WSM yet. Common Lisp is the
+# temporary syntax/statistics profile for my-lisp source files; this is
+# classification, not a claim of language identity.
+*.wsm linguist-language=Common-Lisp linguist-detectable
+*.my linguist-language=Common-Lisp linguist-detectable
+*.lisp linguist-language=Common-Lisp linguist-detectable
