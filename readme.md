@@ -1,6 +1,11 @@
 [![Binder](https://mybinder.org/badge.svg)](https://mybinder.org/v2/gh/kmader/chess-alpha-zero/master?urlpath=lab)
 [![Demo Notebook](https://img.shields.io/badge/launch-demo_notebook-red.svg)](https://mybinder.org/v2/gh/kmader/chess-alpha-zero/master?filepath=notebooks%2Fdemo.ipynb)
 
+> **Ліцензійна межа:** це форк `kmader/chess-alpha-zero`. Первісна ліцензія
+> успадкованого коду збережена в [`LICENSE.txt`](LICENSE.txt); ВОЛЬНІСТЬ у
+> [`LICENSE`](LICENSE) стосується лише оригінальної, юридично віддільної роботи
+> Володимира. Повне пояснення: [`LICENSE-SCOPE.md`](LICENSE-SCOPE.md).
+
 PyTorch-порт (2026)
 ====================
 
